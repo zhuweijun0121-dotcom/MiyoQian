@@ -155,14 +155,15 @@ class DailyScheduler:
         jitter = max(int(schedule.get("jitter_minutes", 45) or 0), 0)
         if not jitter:
             return True
-        delay_minutes = random.randint(0, jitter)
-        if delay_minutes <= 0:
+        delay_seconds = random.randint(0, jitter * 60)
+        if delay_seconds <= 0:
             return True
         if due_run:
-            self.log(f"已到自动执行时间 {due_run.strftime('%Y-%m-%d %H:%M:%S')}，随机延后 {delay_minutes} 分钟后执行")
+            delay_min_str = f"{delay_seconds // 60}分{delay_seconds % 60}秒" if delay_seconds >= 60 else f"{delay_seconds}秒"
+            self.log(f"已到自动执行时间 {due_run.strftime('%Y-%m-%d %H:%M:%S')}，随机延后 {delay_min_str} 后执行")
         with self._lock:
-            self._next_run = datetime.now() + timedelta(minutes=delay_minutes)
-        if self._stop.wait(timeout=delay_minutes * 60):
+            self._next_run = datetime.now() + timedelta(seconds=delay_seconds)
+        if self._stop.wait(timeout=delay_seconds):
             return False
         return True
 
