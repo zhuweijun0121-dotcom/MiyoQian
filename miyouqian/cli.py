@@ -86,7 +86,7 @@ def command_login(config_path: pathlib.Path, account_name: str, timeout: int, sa
     with ApiClient() as client:
         login = QRLogin(client, str(device["id"]), str(device["fp"]))
         url, ticket = login.fetch()
-        print("请用米游社 APP 扫码：我的 -> 右上角扫一扫")
+        print("请用米游社 APP 扫码：我的 -> 左上角扫一扫")
         print_qrcode(url, image_path=image_path)
         if image_path:
             print(f"二维码图片已保存: {image_path.resolve()}")
