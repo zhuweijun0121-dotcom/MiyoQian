@@ -395,9 +395,19 @@ def build_account_summary(label: str, lines: list[str], success: bool) -> dict[s
 
 def build_bbs_tasks(lines: list[str]) -> list[dict[str, Any]]:
     specs = [
-        ("社区签到", 1, ("社区签到成功", "社区签到已完成"), ("社区签到失败", "社区签到触发验证码")),
+        (
+            "社区签到",
+            1,
+            ("社区签到成功", "社区签到已完成"),
+            ("社区签到失败", "社区签到验证码重试失败", "社区签到触发验证码，已跳过"),
+        ),
         ("看帖任务", 3, ("阅读成功", "看帖任务已完成"), ("阅读失败",)),
-        ("点赞任务", 5, ("点赞成功", "点赞任务已完成"), ("点赞失败", "点赞触发验证码")),
+        (
+            "点赞任务",
+            5,
+            ("点赞成功", "点赞任务已完成"),
+            ("点赞失败", "点赞验证码重试失败", "点赞触发验证码，已跳过"),
+        ),
         ("分享任务", 1, ("分享成功", "分享任务已完成"), ("分享失败",)),
     ]
     return [task_progress(lines, *spec) for spec in specs]
@@ -477,9 +487,7 @@ def parse_point_summary(
         possible = initial_received + number_after(progress_line, "还可获得")
     if not possible:
         possible = actual + number_after(end_line, "还能获得")
-    today_done = max(actual - initial_received, 0)
-    if not today_done and actual:
-        today_done = actual
+    today_done = actual or initial_received
     return {
         "actual": actual,
         "possible": possible,

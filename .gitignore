@@ -7,3 +7,4 @@ qrcode.png
 *.log
 data/
 logs/
+tests/*

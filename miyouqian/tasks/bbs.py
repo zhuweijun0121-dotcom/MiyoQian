@@ -90,10 +90,10 @@ class BbsTasks:
             self._add(messages, "获取帖子列表失败，无法执行看帖/点赞/分享")
         state = self._task_state() or state
         final_received = int(state.get("already_received_points") or received)
-        final_can_get = int(state.get("can_get_points") or can_get)
+        final_can_get = max(possible_today - final_received, 0)
         final_total = int(state.get("total_points") or total)
         gained = max(final_received - received, 0)
-        final_possible = final_received + final_can_get
+        final_possible = max(possible_today, final_received)
         self._add(
             messages,
             "社区任务结束："
