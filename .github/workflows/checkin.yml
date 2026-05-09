@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "执行模式"
+        description: "执行模式：全部任务=按配置执行；只执行游戏签到=跳过社区任务；只执行米游币社区任务=跳过游戏签到"
         required: true
-        default: "all"
+        default: "全部任务"
         type: choice
         options:
-          - all
-          - games
-          - bbs
+          - 全部任务
+          - 只执行游戏签到
+          - 只执行米游币社区任务
       account:
         description: "只执行指定账号名，留空执行全部账号"
         required: false
@@ -82,13 +82,13 @@ jobs:
           cmd=(uv run python main.py run)
 
           case "${RUN_MODE}" in
-            games)
+            只执行游戏签到|games)
               cmd+=(--games-only)
               ;;
-            bbs)
+            只执行米游币社区任务|bbs)
               cmd+=(--bbs-only)
               ;;
-            all|"")
+            全部任务|all|"")
               ;;
             *)
               echo "未知执行模式: ${RUN_MODE}" >&2
