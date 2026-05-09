@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.venv/
+logs/
+data/
+*.log
+assets/
+tests/

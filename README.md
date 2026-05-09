@@ -71,6 +71,69 @@
 
 ## 部署流程
 
+### Docker 部署（推荐）
+
+适合部署在服务器或 NAS 上，无需手动安装 Python 和 uv。
+
+#### 1. 获取项目文件
+
+```bash
+git clone <你的仓库地址>
+cd 米游社签到
+```
+
+#### 2. 构建并启动
+
+```bash
+# 进入 docker 目录
+cd docker
+
+# 构建并启动（后台运行）
+docker compose up -d --build
+```
+
+启动成功后，通过端口映射从宿主机访问 `http://localhost:5890` 即可打开 Web 控制台。
+
+> 容器首次启动时会自动从 `config.example.yaml` 生成 `config.yaml`，无需手动操作。
+> 容器内服务已默认监听 `0.0.0.0`（Docker 必需），宿主机通过 `localhost:5890` 访问即可。
+
+#### 4. 常用命令
+
+```bash
+cd docker
+
+# 查看日志
+docker compose logs -f
+
+# 停止服务
+docker compose down
+
+# 重新构建（更新代码后）
+docker compose up -d --build
+```
+
+#### 5. 数据持久化
+
+`docker-compose.yml` 已配置以下目录的持久化映射：
+
+| 宿主机路径 | 容器路径 | 说明 |
+| --- | --- | --- |
+| `config.yaml` | `/app/config.yaml` | 配置文件 |
+| `data/` | `/app/data/` | 登录凭证（敏感） |
+| `logs/` | `/app/logs/` | 运行日志 |
+
+容器重建后数据不会丢失。
+
+#### 注意事项
+
+- 容器内时区默认为 `Asia/Shanghai`，如需修改可在 `docker-compose.yml` 中调整 `TZ` 环境变量
+- 如需修改端口，同时修改 `docker-compose.yml` 的 `ports` 和 `config.yaml` 的 `web.port`
+- 公网访问需要在宿主机层面配置（开放防火墙端口、反向代理等），首次访问时页面会引导设置密码
+
+---
+
+### 本地部署
+
 下面以本地部署为例。项目推荐使用 `uv` 管理 Python 环境和依赖。Windows 用户可以直接使用 PowerShell；Linux 或 macOS 用户把对应命令换成下方给出的 shell 命令即可。
 
 ### 1. 安装 uv
