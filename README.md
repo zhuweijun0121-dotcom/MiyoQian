@@ -132,6 +132,92 @@ docker compose up -d --build
 
 ---
 
+### GitHub Actions 定时签到（无需服务器）
+
+适合不想长期运行电脑、服务器或 NAS 的用户。Actions 会按 `.github/workflows/checkin.yml` 里的时间自动执行一次 `python main.py run`。
+
+> GitHub Actions 只负责定时触发一次性签到，不会启动 Web 控制台。首次扫码登录和配置调整建议先在本地或 Docker 环境完成。
+> 使用前请先 Fork 本项目到自己的 GitHub 账号下，后续所有 Secrets 和 Actions 都在你自己的 Fork 仓库里配置和运行。
+
+#### 1. 本地生成配置和凭证
+
+先按“本地部署”或“Docker 部署”完成一次扫码登录，并确认手动执行签到正常。完成后项目目录里会有：
+
+| 文件 | 说明 |
+| --- | --- |
+| `config.yaml` | 公开配置，不建议直接提交仓库 |
+| `data/credentials.yaml` | 登录凭证，敏感信息，绝对不要提交仓库 |
+
+#### 2. Fork 项目并启用 Actions
+
+点击本仓库右上角的 `Fork`，把项目复制到你自己的 GitHub 账号下。
+
+进入你自己的 Fork 仓库后，打开 `Actions` 页面。如果页面提示 workflow 被禁用，点击启用。不要在原项目仓库里配置你的账号凭证，也不要把凭证发给项目作者。
+
+#### 3. 添加 GitHub Secrets
+
+进入你自己的 Fork 仓库：
+
+```text
+Settings -> Secrets and variables -> Actions -> New repository secret
+```
+
+添加两个 Secret：
+
+| Secret 名称 | 内容 |
+| --- | --- |
+| `MIYOUQIAN_CONFIG` | 复制 `config.yaml` 的完整内容 |
+| `MIYOUQIAN_CREDENTIALS` | 复制 `data/credentials.yaml` 的完整内容 |
+
+粘贴时保留 YAML 原本的换行和缩进。凭证过期、账号变化或推送配置变化后，重新复制最新文件内容覆盖对应 Secret 即可。
+
+#### 4. 修改定时执行时间
+
+默认每天北京时间 `09:20` 执行：
+
+```yaml
+schedule:
+  - cron: "20 9 * * *"
+    timezone: "Asia/Shanghai"
+```
+
+如果想改成每天北京时间 `18:30`，改为：
+
+```yaml
+schedule:
+  - cron: "30 18 * * *"
+    timezone: "Asia/Shanghai"
+```
+
+`cron` 的 5 个字段分别是：
+
+```text
+分钟 小时 日期 月份 星期
+```
+
+不建议设置在整点，例如 `0 9 * * *`，整点附近 GitHub Actions 排队更容易延迟。定时任务只会在默认分支上的 workflow 生效。
+
+#### 5. 手动执行一次
+
+进入你自己的 Fork 仓库的 `Actions` 页面，选择 `米游签定时签到`，点击 `Run workflow`：
+
+- `all`：按配置执行游戏签到和米游币任务
+- `games`：只执行游戏签到
+- `bbs`：只执行米游币社区任务
+- `account`：可选，只执行指定账号名；留空执行全部账号
+
+执行完成后可以在 Actions 日志底部查看任务摘要。如果配置了推送渠道，执行结果也会按 `config.yaml` 中的推送配置发送。
+
+#### 注意事项
+
+- 不要把 `config.yaml`、`data/credentials.yaml`、Actions 日志截图公开给别人
+- 不要在原项目仓库提交 Issue、PR 或评论时粘贴任何账号凭证
+- GitHub Actions 的定时任务可能会因平台负载延迟几分钟
+- 公开仓库如果长期没有活动，GitHub 可能会自动停用定时 workflow
+- `config.yaml` 里的 `schedule` 配置不会影响 Actions 定时，Actions 的执行时间以 `.github/workflows/checkin.yml` 为准
+
+---
+
 ### 本地部署
 
 下面以本地部署为例。项目推荐使用 `uv` 管理 Python 环境和依赖。Windows 用户可以直接使用 PowerShell；Linux 或 macOS 用户把对应命令换成下方给出的 shell 命令即可。
