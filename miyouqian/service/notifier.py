@@ -518,6 +518,20 @@ def parse_counts(line: str) -> tuple[int, int, int]:
     )
 
 
+def is_task_success(lines: list[str]) -> bool:
+    for line in lines:
+        if line.startswith(("游戏失败项：", "米游币失败项：")):
+            return False
+        if line.startswith(("游戏签到汇总：", "米游币任务汇总：")):
+            if number_after(line, "失败") > 0:
+                return False
+        elif line in {"任务状态获取失败，请检查 cookie/stoken", "获取帖子列表失败，无法执行看帖/点赞/分享"}:
+            return False
+        elif line.startswith(("配置 enable=false", "没有配置账号")):
+            return False
+    return True
+
+
 def parse_point_summary(
     summary_line: str,
     progress_line: str = "",

@@ -23,7 +23,7 @@ from ..auth.login import QRLogin
 from ..core.config import load_config, log_path, normalize_config, save_config, validate_unique_account_uids
 from ..core.http import ApiClient
 from ..core.logs import append_log, configure_logger, format_line, print_startup_banner
-from .notifier import send_push
+from .notifier import is_task_success, send_push
 from .runner import run_tasks
 from .scheduler import DailyScheduler
 
@@ -157,7 +157,7 @@ class WebApp:
                 self.log(push_result, "push")
             raise
         self.log("任务编排完成，准备发送推送", "task")
-        push_result = send_push(config, "米游签任务完成", "\n".join(lines), success=True)
+        push_result = send_push(config, "米游签任务完成", "\n".join(lines), success=is_task_success(lines))
         if push_result:
             self.log(push_result, "push")
         return []
