@@ -13,7 +13,7 @@ import smtplib
 import time
 from datetime import datetime
 from email.message import EmailMessage
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote_plus
 
 import httpx
@@ -394,38 +394,77 @@ def build_account_summary(label: str, lines: list[str], success: bool) -> dict[s
 
 
 def build_bbs_tasks(lines: list[str]) -> list[dict[str, Any]]:
+    success_items = task_items(lines, "米游币成功项：")
+    failed_items = task_items(lines, "米游币失败项：")
     specs = [
         (
             "社区签到",
             1,
+            ("社区签到",),
+            ("社区签到已完成",),
+            lambda line: line.startswith("正在进行") and line.endswith("社区签到"),
             ("社区签到成功", "社区签到已完成"),
             ("社区签到失败", "社区签到验证码重试失败", "社区签到触发验证码，已跳过"),
         ),
-        ("看帖任务", 3, ("阅读成功", "看帖任务已完成"), ("阅读失败",)),
+        (
+            "看帖任务",
+            3,
+            ("看帖 ",),
+            ("看帖任务已完成",),
+            lambda line: line.startswith("正在浏览:"),
+            ("阅读成功", "看帖任务已完成"),
+            ("阅读失败",),
+        ),
         (
             "点赞任务",
             5,
+            ("点赞 ",),
+            ("点赞任务已完成",),
+            lambda line: line.startswith("正在点赞:"),
             ("点赞成功", "点赞任务已完成"),
             ("点赞失败", "点赞验证码重试失败", "点赞触发验证码，已跳过"),
         ),
-        ("分享任务", 1, ("分享成功", "分享任务已完成"), ("分享失败",)),
+        (
+            "分享任务",
+            1,
+            ("分享 ",),
+            ("分享任务已完成",),
+            lambda line: line.startswith("正在分享:"),
+            ("分享成功", "分享任务已完成"),
+            ("分享失败",),
+        ),
     ]
-    return [task_progress(lines, *spec) for spec in specs]
+    return [task_progress(lines, success_items, failed_items, *spec) for spec in specs]
 
 
 def task_progress(
     lines: list[str],
+    success_items: list[str],
+    failed_items: list[str],
     name: str,
     target: int,
+    item_keywords: tuple[str, ...],
+    skip_keywords: tuple[str, ...],
+    start_matcher: Callable[[str], bool],
     done_keywords: tuple[str, ...],
     fail_keywords: tuple[str, ...],
 ) -> dict[str, Any]:
-    completed_by_skip = any("已完成" in line and any(keyword in line for keyword in done_keywords) for line in lines)
-    done = count_keyword_hits(lines, done_keywords)
-    failed = count_keyword_hits(lines, fail_keywords)
+    completed_by_skip = any(any(keyword in line for keyword in skip_keywords) for line in lines)
+    started = sum(1 for line in lines if start_matcher(line))
+    done = count_task_items(success_items, item_keywords)
+    failed = count_task_items(failed_items, item_keywords)
+    if not success_items and not failed_items:
+        done = count_keyword_hits(lines, done_keywords)
+        failed = count_keyword_hits(lines, fail_keywords)
     if completed_by_skip:
-        done = max(done, target)
-    total = max(target, done + failed, 1)
+        total = max(target, started, done, failed, 1)
+        done = max(done, total)
+    elif started:
+        total = max(started, done + failed, 1)
+    elif done or failed:
+        total = max(done + failed, 1)
+    else:
+        total = max(target, 1)
     percent = round(done / total * 100)
     if failed:
         label = f"失败 {failed}"
@@ -448,6 +487,17 @@ def task_progress(
         "label": label,
         "color": color,
     }
+
+
+def task_items(lines: list[str], prefix: str) -> list[str]:
+    items: list[str] = []
+    for line in prefixed_lines(lines, prefix):
+        items.extend(item.strip() for item in line.removeprefix(prefix).split(";") if item.strip())
+    return items
+
+
+def count_task_items(items: list[str], keywords: tuple[str, ...]) -> int:
+    return sum(1 for item in items if any(keyword in item for keyword in keywords))
 
 
 def first_line(lines: list[str], prefix: str) -> str:
