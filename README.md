@@ -83,9 +83,10 @@
 4. 点开返回成功的请求，在请求头里复制 `X-Rpc-Combo_token` 的值。
 5. 回到米游签账号行，点击云游戏图标，把值填到对应游戏的 Token 输入框。
 
-云原神和云绝区零的 Token 不通用，需要分别复制。这个 Token 属于敏感凭证，不要发给别人或提交到公开仓库。
+云原神和云绝区零的 Token 不通用，需要分别复制。这个 Token 属于敏感凭证，存储在 `data/credentials.yaml` 中：
 
 ```yaml
+# config.yaml - 配置启用哪些云游戏
 features:
   cloud_game_checkin: true
 
@@ -94,6 +95,7 @@ cloud_games:
     - genshin
     - zzz
 
+# data/credentials.yaml - 存储 token 凭据
 accounts:
   - name: main
     cloud_games:
@@ -565,7 +567,7 @@ cloud_games:
     - zzz
 ```
 
-在每个账号下填写云游戏 Token：
+在 `data/credentials.yaml` 中为每个账号填写云游戏 Token：
 
 ```yaml
 accounts:

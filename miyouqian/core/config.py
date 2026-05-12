@@ -138,7 +138,6 @@ def normalize_config(config: dict[str, Any]) -> None:
         account["name"] = str(account.get("name") or "")[:10]
         for field in SENSITIVE_ACCOUNT_FIELDS:
             account.setdefault(field, "")
-        normalize_account_cloud_games(account)
     device = config.setdefault("device", {})
     first_cookie = str(config["accounts"][0].get("cookie", "")) if config["accounts"] else ""
     presets = device.setdefault("presets", copy.deepcopy(DEFAULT_DEVICE_PRESETS))
@@ -172,16 +171,6 @@ def normalize_config(config: dict[str, Any]) -> None:
     features.setdefault("game_checkin", True)
     features.setdefault("cloud_game_checkin", False)
     features.setdefault("bbs_tasks", False)
-
-
-def normalize_account_cloud_games(account: dict[str, Any]) -> None:
-    cloud_games = account.get("cloud_games", {})
-    if not isinstance(cloud_games, dict):
-        cloud_games = {}
-    account["cloud_games"] = cloud_games
-    tokens = normalize_cloud_game_tokens(cloud_games.get("tokens", {}))
-    cloud_games.pop("enabled", None)
-    cloud_games["tokens"] = tokens
 
 
 def normalize_cloud_game_tokens(value: Any) -> dict[str, str]:
@@ -408,24 +397,20 @@ def strip_credentials(config: dict[str, Any]) -> dict[str, Any]:
     for account in public_config.get("accounts", []):
         for field in SENSITIVE_ACCOUNT_FIELDS:
             account.pop(field, None)
-        cloud_games = account.get("cloud_games")
-        if isinstance(cloud_games, dict):
-            cloud_games.pop("tokens", None)
+        account.pop("cloud_games", None)
     return public_config
 
 
 def merge_account_cloud_game_credentials(account: dict[str, Any], saved: dict[str, Any] | None) -> None:
+    if saved and isinstance(saved.get("cloud_games"), dict):
+        saved_tokens = normalize_cloud_game_tokens((saved.get("cloud_games") or {}).get("tokens", {}))
+    else:
+        saved_tokens = {}
     cloud_games = account.setdefault("cloud_games", {})
     if not isinstance(cloud_games, dict):
         cloud_games = {}
         account["cloud_games"] = cloud_games
-    tokens = normalize_cloud_game_tokens(cloud_games.get("tokens", {}))
-    if saved and isinstance(saved.get("cloud_games"), dict):
-        saved_tokens = normalize_cloud_game_tokens((saved.get("cloud_games") or {}).get("tokens", {}))
-        for key, value in saved_tokens.items():
-            if value and not tokens.get(key):
-                tokens[key] = value
-    cloud_games["tokens"] = tokens
+    cloud_games["tokens"] = saved_tokens
 
 
 def credentials_path(config_path: str | pathlib.Path, config: dict[str, Any]) -> pathlib.Path:

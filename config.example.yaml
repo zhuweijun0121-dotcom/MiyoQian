@@ -5,14 +5,7 @@ enable: true
 
 accounts:
   []
-# 每个账号可单独配置云游戏签到，例如：
-# - name: "main"
-#   cloud_games:
-#     tokens:
-#       genshin: ""  # 云原神 x-rpc-combo_token
-#       zzz: ""      # 云绝区零 x-rpc-combo_token
-#   # 获取方式：登录云游戏网页版，开发者工具 Network 过滤 wallet/wallet/get，
-#   # 复制成功请求头里的 X-Rpc-Combo_token。
+# 账号凭据（cookie、stoken、云游戏 tokens 等）存储在 data/credentials.yaml 中
 
 storage:
   data_dir: data
