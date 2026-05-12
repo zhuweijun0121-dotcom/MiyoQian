@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .git/
 .gitignore
-.venv/
 logs/
 data/
 *.log
