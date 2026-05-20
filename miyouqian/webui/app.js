@@ -818,7 +818,7 @@ function renderShopConfig() {
   if (!$("shopEnable")) return;
   const shop = config.shop_exchange || {};
   $("shopEnable").checked = Boolean(shop.enable ?? false);
-  $("shopRetrySeconds").value = shop.retry_seconds ?? 5;
+  $("shopRetrySeconds").value = shop.retry_seconds ?? 20;
   $("shopRetryInterval").value = shop.retry_interval ?? 0.4;
   if ($("shopGoodsMetric")) $("shopGoodsMetric").textContent = shopGoodsLoading ? "加载中" : String(shopGoods.length);
   if ($("shopPlansMetric")) $("shopPlansMetric").textContent = String((shop.plans || []).length);
@@ -984,6 +984,8 @@ function shopPlanRow(plan, index) {
       <input data-shop-plan-field="icon" type="hidden" value="${escapeAttr(plan.icon || "")}" />
       <input data-shop-plan-field="price" type="hidden" value="${escapeAttr(plan.price ?? 0)}" />
       <input data-shop-plan-field="stock" type="hidden" value="${escapeAttr(plan.stock || "")}" />
+      <input data-shop-plan-field="game" type="hidden" value="${escapeAttr(plan.game || "")}" />
+      <input data-shop-plan-field="device_fp" type="hidden" value="${escapeAttr(plan.device_fp || "")}" />
       <input data-shop-plan-field="uid" type="hidden" value="${escapeAttr(plan.uid || "")}" />
       <input data-shop-plan-field="region" type="hidden" value="${escapeAttr(plan.region || "")}" />
       <input data-shop-plan-field="game_biz" type="hidden" value="${escapeAttr(plan.game_biz || "")}" />
@@ -1051,7 +1053,7 @@ function collectShopExchange() {
   const shop = {
     ...(existing || {}),
     enable: Boolean($("shopEnable")?.checked ?? existing.enable ?? false),
-    retry_seconds: Number($("shopRetrySeconds")?.value || existing.retry_seconds || 5),
+    retry_seconds: Number($("shopRetrySeconds")?.value || existing.retry_seconds || 20),
     retry_interval: Number($("shopRetryInterval")?.value || existing.retry_interval || 0.4),
     plans: [],
   };
@@ -1074,7 +1076,7 @@ async function addShopPlan(good) {
   if (!good) return;
   if (isShopGoodSoldOut(good)) throw new Error("商品已售罄，不能加入兑换计划");
   collectConfig();
-  config.shop_exchange = config.shop_exchange || { enable: false, retry_seconds: 5, retry_interval: 0.4, plans: [] };
+  config.shop_exchange = config.shop_exchange || { enable: true, retry_seconds: 20, retry_interval: 0.4, plans: [] };
   const firstAccountIndex = Math.max((config.accounts || []).findIndex((account) => account.stuid), 0);
   if (!(config.accounts || [])[firstAccountIndex]?.stuid) {
     throw new Error("请先添加并登录账号");
@@ -1150,7 +1152,7 @@ async function exchangePlanNow(planOrIndex) {
 }
 
 async function buildShopPlan(good, accountIndex) {
-  await api("/api/shop/device-fp");
+  const fpData = await api("/api/shop/device-fp");
   const detail = await api(`/api/shop/good-detail?goods_id=${encodeURIComponent(good.goods_id)}`);
   const base = { ...good, ...detail };
   const plan = {
@@ -1163,7 +1165,9 @@ async function buildShopPlan(good, accountIndex) {
     price: base.price,
     stock: base.stock,
     exchange_at: base.exchange_timestamp || Math.floor(Date.now() / 1000),
+    game: base.game || "",
     game_biz: base.game_biz || "",
+    device_fp: fpData.device_fp || "",
     uid: "",
     region: "",
     role_name: "",

@@ -68,8 +68,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "channels": [],
     },
     "shop_exchange": {
-        "enable": False,
-        "retry_seconds": 5,
+        "enable": True,
+        "retry_seconds": 20,
         "retry_interval": 0.4,
         "plans": [],
     },
@@ -185,11 +185,11 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
     if not isinstance(shop, dict):
         shop = {}
         config["shop_exchange"] = shop
-    shop["enable"] = parse_bool(shop.get("enable", False))
+    shop["enable"] = parse_bool(shop.get("enable", True))
     try:
-        shop["retry_seconds"] = max(float(shop.get("retry_seconds", 5)), 0)
+        shop["retry_seconds"] = max(float(shop.get("retry_seconds", 20)), 0)
     except (TypeError, ValueError):
-        shop["retry_seconds"] = 5
+        shop["retry_seconds"] = 20
     try:
         shop["retry_interval"] = max(float(shop.get("retry_interval", 0.4)), 0.05)
     except (TypeError, ValueError):
@@ -219,7 +219,9 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
             "price": parse_int(raw.get("price"), 0),
             "stock": str(raw.get("stock") or ""),
             "exchange_at": exchange_at,
+            "game": str(raw.get("game") or ""),
             "game_biz": str(raw.get("game_biz") or ""),
+            "device_fp": str(raw.get("device_fp") or ""),
             "uid": str(raw.get("uid") or "").strip(),
             "region": str(raw.get("region") or "").strip(),
             "role_name": str(raw.get("role_name") or "").strip(),

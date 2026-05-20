@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -194,7 +195,7 @@ class ShopExchange:
         if uid and region and game_biz:
             body.update({"uid": uid, "region": region, "game_biz": game_biz})
         started = time.time()
-        data = self.client.post_json(c.MALL_EXCHANGE_URL, json=body, headers=self._exchange_headers())
+        data = self.client.post_json(c.MALL_EXCHANGE_URL, json=body, headers=self._exchange_headers(plan))
         retcode = data.get("retcode")
         message = str(data.get("message") or "")
         ok = retcode == 0
@@ -220,9 +221,11 @@ class ShopExchange:
             self._add(f"正在发送第 {attempt} 次商品兑换请求")
             last = self.exchange(plan)
             last["attempt"] = attempt
-            if last.get("ok") or time.time() >= deadline:
+            remaining = deadline - time.time()
+            if last.get("ok") or remaining <= 0:
                 return last
-            time.sleep(interval)
+            sleep_seconds = max(interval + random.uniform(-0.5, 0.5), 0.05)
+            time.sleep(min(sleep_seconds, remaining))
 
     def _goods_headers(self) -> dict[str, str]:
         return {
@@ -251,7 +254,10 @@ class ShopExchange:
             "Cookie": str(self.account.get("cookie") or ""),
         }
 
-    def _exchange_headers(self) -> dict[str, str]:
+    def _exchange_headers(self, plan: dict[str, Any]) -> dict[str, str]:
+        device_fp = str(plan.get("device_fp") or "").strip()
+        if not device_fp:
+            raise ValueError("兑换计划缺少 device_fp，请重新添加计划")
         headers = {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh-Hans;q=0.9",
@@ -265,7 +271,7 @@ class ShopExchange:
             "x-rpc-channel": "appstore",
             "x-rpc-client_type": "1",
             "x-rpc-verify_key": c.PASSPORT_APP_ID,
-            "x-rpc-device_fp": str(self.device.get("fp") or crypto.device_fp()),
+            "x-rpc-device_fp": device_fp,
             "x-rpc-device_id": str(self.device["id"]),
             "x-rpc-device_model": str(self.device.get("model") or "Mi 6"),
             "x-rpc-device_name": str(self.device.get("name") or "Xiaomi MI 6"),

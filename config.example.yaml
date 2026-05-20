@@ -93,7 +93,7 @@ push:
       topic: ""
 
 shop_exchange:
-  enable: false
-  retry_seconds: 5
+  enable: true
+  retry_seconds: 20
   retry_interval: 0.4
   plans: []

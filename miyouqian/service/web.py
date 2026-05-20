@@ -299,11 +299,8 @@ class WebApp:
         account_name = display_account_name(account)
         goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
         self.log(f"开始商品兑换: {goods_name}，账号 {account_name}", "exchange")
-        try:
-            self.ensure_shop_device_fp()
-        except Exception:
-            self.log(f"商品兑换中止: {goods_name}，账号 {account_name}，device_fp 获取失败", "exchange")
-            raise
+        if not str(plan.get("device_fp") or "").strip():
+            raise ValueError("兑换计划缺少 device_fp，请重新添加计划")
         with self.lock:
             config = copy.deepcopy(self.config)
         try:
