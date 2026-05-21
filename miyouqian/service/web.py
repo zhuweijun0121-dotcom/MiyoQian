@@ -390,7 +390,17 @@ class WebApp:
             else:
                 title = "❌ 商品兑换失败"
 
-            push_result = send_exchange_push(config, title, goods_name, result, plan, success=is_success)
+            # 从 account_index 获取账号信息，添加到 plan 中
+            plan_with_account = dict(plan)
+            account_index = plan.get("account_index")
+            if account_index is not None:
+                try:
+                    account = self._account_by_index(int(account_index))
+                    plan_with_account["account"] = display_account_name(account)
+                except Exception:
+                    plan_with_account["account"] = "未知账号"
+
+            push_result = send_exchange_push(config, title, goods_name, result, plan_with_account, success=is_success)
             if push_result:
                 self.log(f"商品兑换推送已发送: {push_result}", "exchange")
         except Exception as exc:
