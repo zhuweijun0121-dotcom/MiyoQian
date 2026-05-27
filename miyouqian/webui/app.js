@@ -48,6 +48,8 @@ let shopRequestInFlight = false;
 let shopGoodsLoading = false;
 let shopGoodsLoadSeq = 0;
 let shopExchangeNowGoodsId = "";
+let shopPlanMetaCache = new Map();
+let shopPlanMetaLoading = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -1020,6 +1022,11 @@ function renderShopPlans() {
         <span>从商品列表加入计划后，可设置账号、时间和可选的收货地址或游戏角色。</span>
       </div>`;
   bindShopPlanEvents();
+  plans.forEach((plan, index) => {
+    if (shopPlanNeedsAccountMeta(plan)) {
+      void ensureShopPlanMeta(index);
+    }
+  });
 }
 
 function shopPlanRow(plan, index) {
@@ -1037,6 +1044,9 @@ function shopPlanRow(plan, index) {
         })
         .join("")
     : `<option value="0">暂无账号</option>`;
+  const meta = getShopPlanMeta(plan);
+  const needsMeta = shopPlanNeedsAccountMeta(plan);
+  const addressOptions = renderShopAddressOptions(plan, meta);
   return `
     <details class="shop-plan ${paused ? "is-paused" : ""}" data-shop-plan="${index}" ${open}>
       <summary class="shop-plan-summary">
@@ -1068,10 +1078,7 @@ function shopPlanRow(plan, index) {
           <span>兑换时间</span>
           <input data-shop-plan-field="exchange_at" type="datetime-local" value="${escapeAttr(timestampToLocalInput(plan.exchange_at))}" data-autosave />
         </label>
-        <label>
-          <span>收货地址 ID</span>
-          <input data-shop-plan-field="address_id" type="text" value="${escapeAttr(plan.address_id || "")}" placeholder="实体商品可填" data-autosave />
-        </label>
+        ${addressOptions}
         <div class="readonly-field">
           <span>游戏角色</span>
           <strong>${escapeHtml(roleDisplay)}</strong>
@@ -1087,6 +1094,7 @@ function shopPlanRow(plan, index) {
       <input data-shop-plan-field="icon" type="hidden" value="${escapeAttr(plan.icon || "")}" />
       <input data-shop-plan-field="price" type="hidden" value="${escapeAttr(plan.price ?? 0)}" />
       <input data-shop-plan-field="stock" type="hidden" value="${escapeAttr(plan.stock || "")}" />
+      <input data-shop-plan-field="type" type="hidden" value="${escapeAttr(plan.type ?? 0)}" />
       <input data-shop-plan-field="game" type="hidden" value="${escapeAttr(plan.game || "")}" />
       <input data-shop-plan-field="device_fp" type="hidden" value="${escapeAttr(plan.device_fp || "")}" />
       <input data-shop-plan-field="uid" type="hidden" value="${escapeAttr(plan.uid || "")}" />
@@ -1156,7 +1164,7 @@ function bindShopPlanEvents() {
     .forEach((select) => {
       select.addEventListener("change", () => {
         const row = select.closest("[data-shop-plan]");
-        refreshShopPlanRole(Number(row?.dataset.shopPlan)).catch((error) =>
+        refreshShopPlanMeta(Number(row?.dataset.shopPlan)).catch((error) =>
           showToast(error.message),
         );
       });
@@ -1312,6 +1320,7 @@ async function buildShopPlan(good, accountIndex) {
     icon: base.icon,
     price: base.price,
     stock: base.stock,
+    type: Number(base.type || 0),
     exchange_at: base.exchange_timestamp || Math.floor(Date.now() / 1000),
     game: base.game || "",
     game_biz: base.game_biz || "",
@@ -1325,48 +1334,154 @@ async function buildShopPlan(good, accountIndex) {
     last_attempt_key: "",
     last_run: "",
   };
-  if (Number(base.type || 0) === 2) {
-    if (!plan.game_biz) {
-      throw new Error("商品详情缺少 game_biz，无法自动匹配游戏角色");
+  if (shopPlanNeedsAccountMeta(plan)) {
+    const meta = await loadShopPlanMeta(plan);
+    applyShopPlanMeta(plan, meta, {
+      requireRole: Number(base.type || 0) === 2,
+    });
+  }
+  return plan;
+}
+
+async function refreshShopPlanMeta(index) {
+  collectConfig();
+  const plan = config.shop_exchange?.plans?.[index];
+  if (!plan || !shopPlanNeedsAccountMeta(plan)) return;
+  const meta = await loadShopPlanMeta(plan, true);
+  applyShopPlanMeta(plan, meta, {
+    requireRole: Boolean(plan.game_biz) || Number(plan.type || 0) === 2,
+  });
+  renderShopPlans();
+  await autoSaveConfig();
+  showToast(
+    plan.game_biz || Number(plan.type || 0) === 2
+      ? "账号信息已更新"
+      : "地址已更新",
+  );
+}
+
+async function ensureShopPlanMeta(index) {
+  const plan = config.shop_exchange?.plans?.[index];
+  if (!plan || !shopPlanNeedsAccountMeta(plan)) return;
+  await loadShopPlanMeta(plan).catch((error) => {
+    showToast(error.message);
+    throw error;
+  });
+  renderShopPlans();
+}
+
+async function loadShopPlanMeta(plan, force = false) {
+  const key = shopPlanMetaKey(plan);
+  if (!force && shopPlanMetaCache.has(key)) {
+    return shopPlanMetaCache.get(key);
+  }
+  if (shopPlanMetaLoading.has(key)) {
+    return shopPlanMetaCache.get(key) || null;
+  }
+  shopPlanMetaLoading.add(key);
+  try {
+    const query = [`account_index=${Number(plan.account_index || 0)}`];
+    if (plan.game_biz) {
+      query.push(`game_biz=${encodeURIComponent(plan.game_biz)}`);
     }
-    const meta = await api(
-      `/api/shop/account-meta?account_index=${accountIndex}&game_biz=${encodeURIComponent(plan.game_biz)}`,
-    );
-    const role = (meta.roles || [])[0];
+    const meta = await api(`/api/shop/account-meta?${query.join("&")}`);
+    const normalized = {
+      ...meta,
+      addresses: Array.isArray(meta.addresses) ? meta.addresses : [],
+      roles: Array.isArray(meta.roles) ? meta.roles : [],
+    };
+    shopPlanMetaCache.set(key, normalized);
+    return normalized;
+  } finally {
+    shopPlanMetaLoading.delete(key);
+  }
+}
+
+function applyShopPlanMeta(plan, meta, { requireRole = false } = {}) {
+  const addresses = meta?.addresses || [];
+  const roles = meta?.roles || [];
+  const addressId = String(plan.address_id || "").trim();
+  if (shopPlanNeedsAddress(plan)) {
+    const nextAddress =
+      addresses.find((address) => String(address.id || "") === addressId) ||
+      addresses[0];
+    if (!nextAddress) {
+      plan.address_id = "";
+      if (shopPlanNeedsAddress(plan)) {
+        throw new Error("当前账号未找到收货地址，请先在米游社添加地址");
+      }
+    } else {
+      plan.address_id = String(nextAddress.id || "");
+    }
+  }
+  if (requireRole) {
+    const role = roles[0];
     if (!role) {
-      throw new Error("未找到该商品对应的绑定游戏角色");
+      plan.uid = "";
+      plan.region = "";
+      plan.role_name = "";
+      plan.region_name = "";
+      throw new Error("当前账号未找到对应游戏角色");
     }
     plan.uid = role.uid || "";
     plan.region = role.region || "";
     plan.role_name = role.nickname || "";
     plan.region_name = role.region_name || "";
   }
-  return plan;
 }
 
-async function refreshShopPlanRole(index) {
-  collectConfig();
-  const plan = config.shop_exchange?.plans?.[index];
-  if (!plan || !plan.game_biz) return;
-  const meta = await api(
-    `/api/shop/account-meta?account_index=${plan.account_index}&game_biz=${encodeURIComponent(plan.game_biz)}`,
+function shopPlanMetaKey(plan) {
+  return `${Number(plan.account_index || 0)}|${String(plan.game_biz || "")}`;
+}
+
+function getShopPlanMeta(plan) {
+  return shopPlanMetaCache.get(shopPlanMetaKey(plan)) || null;
+}
+
+function shopPlanNeedsAccountMeta(plan) {
+  return shopPlanNeedsAddress(plan) || Boolean(plan.game_biz);
+}
+
+function shopPlanNeedsAddress(plan) {
+  return (
+    Number(plan.type || 0) === 2 ||
+    Boolean(String(plan.address_id || "").trim())
   );
-  const role = (meta.roles || [])[0];
-  if (!role) {
-    plan.uid = "";
-    plan.region = "";
-    plan.role_name = "";
-    plan.region_name = "";
-    renderShopPlans();
-    throw new Error("当前账号未找到对应游戏角色");
+}
+
+function renderShopAddressOptions(plan, meta) {
+  if (!shopPlanNeedsAddress(plan)) {
+    return "";
   }
-  plan.uid = role.uid || "";
-  plan.region = role.region || "";
-  plan.role_name = role.nickname || "";
-  plan.region_name = role.region_name || "";
-  renderShopPlans();
-  await autoSaveConfig();
-  showToast("游戏角色已更新");
+  const addresses = meta?.addresses || [];
+  const selectedId = String(plan.address_id || "").trim();
+  const options = addresses.length
+    ? addresses
+        .map((address) => {
+          const id = String(address.id || "").trim();
+          const selected = id && id === selectedId ? "selected" : "";
+          return `<option value="${escapeAttr(id)}" ${selected}>${escapeHtml(shopAddressLabel(address))}</option>`;
+        })
+        .join("")
+    : `<option value="">暂无地址，请先在米游社添加地址</option>`;
+  const disabled = addresses.length ? "" : "disabled";
+  return `
+    <label>
+      <span>收货地址</span>
+      <select data-shop-plan-field="address_id" data-autosave ${disabled}>${options}</select>
+    </label>
+  `;
+}
+
+function shopAddressLabel(address) {
+  const area = [address.province_name, address.city_name, address.county_name]
+    .filter(Boolean)
+    .join("");
+  const detail = String(address.addr_ext || "").trim();
+  const contact = [address.connect_name, address.connect_mobile]
+    .filter(Boolean)
+    .join(" / ");
+  return [area, detail, contact].filter(Boolean).join(" · ");
 }
 
 function shopRoleDisplay(plan) {
