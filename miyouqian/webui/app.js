@@ -1023,7 +1023,8 @@ function renderShopPlans() {
       </div>`;
   bindShopPlanEvents();
   plans.forEach((plan, index) => {
-    if (shopPlanNeedsAccountMeta(plan)) {
+    const key = shopPlanMetaKey(plan);
+    if (shopPlanNeedsAccountMeta(plan) && !shopPlanMetaCache.has(key) && !shopPlanMetaLoading.has(key)) {
       void ensureShopPlanMeta(index);
     }
   });
@@ -1363,6 +1364,8 @@ async function refreshShopPlanMeta(index) {
 async function ensureShopPlanMeta(index) {
   const plan = config.shop_exchange?.plans?.[index];
   if (!plan || !shopPlanNeedsAccountMeta(plan)) return;
+  const key = shopPlanMetaKey(plan);
+  if (shopPlanMetaCache.has(key) || shopPlanMetaLoading.has(key)) return;
   await loadShopPlanMeta(plan).catch((error) => {
     showToast(error.message);
     throw error;
