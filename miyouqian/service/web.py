@@ -26,7 +26,7 @@ from ..core.http import ApiClient
 from ..core.logs import append_log, configure_logger, format_line, print_startup_banner
 from ..tasks.shop_exchange import ShopExchange
 from .exchange_scheduler import ExchangeScheduler
-from .notifier import is_task_success, send_push, send_exchange_push
+from .notifier import is_task_success, send_push, send_exchange_push, push_channels
 from .runner import run_tasks
 from .scheduler import DailyScheduler
 
@@ -171,6 +171,19 @@ class WebApp:
         if push_result:
             self.log(push_result, "push")
         return []
+
+    def test_push_channels(self) -> str:
+        with self.lock:
+            config = copy.deepcopy(self.config)
+        channels = push_channels(config.get("push") or {})
+        if not channels:
+            raise ValueError("请先启用至少一个推送通道")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message = f"这是一条推送测试消息\n发送时间: {now}\n如收到消息，说明该通道可用"
+        result = send_push(config, "米游签推送测试", message, success=False)
+        if result:
+            self.log(result, "push")
+        return result or "推送测试已完成"
 
     def status(self) -> dict[str, Any]:
         with self.lock:
@@ -757,6 +770,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/config":
                 self.app.set_config(payload)
                 self.send_json({"ok": True})
+                return
+            if path == "/api/push/test":
+                result = self.app.test_push_channels()
+                self.send_json({"ok": True, "result": result})
                 return
             if path == "/api/run":
                 self.app.log("收到手动执行请求", "web")

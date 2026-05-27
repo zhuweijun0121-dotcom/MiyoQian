@@ -1758,6 +1758,16 @@ async function runNow() {
   await refreshStatus();
 }
 
+async function testPushNow() {
+  await autoSaveConfig();
+  const response = await api("/api/push/test", {
+    method: "POST",
+    body: "{}",
+  });
+  showToast(response.result || "推送测试已完成");
+  await refreshStatus();
+}
+
 function addAccount() {
   collectConfig();
   config.accounts.push(emptyAccount(nextAccountName()));
@@ -1952,6 +1962,9 @@ function bindEvents() {
   });
   $("runBtn").addEventListener("click", () =>
     runNow().catch((error) => showToast(error.message)),
+  );
+  $("pushTestBtn")?.addEventListener("click", () =>
+    testPushNow().catch((error) => showToast(error.message)),
   );
   $("logs").addEventListener("scroll", () => {
     logsPinnedToBottom = isScrolledNearBottom($("logs"));

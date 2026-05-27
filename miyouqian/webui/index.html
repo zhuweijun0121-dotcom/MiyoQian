@@ -13,7 +13,9 @@
         <path d="M8 5v14l11-7z"></path>
       </symbol>
       <symbol id="i-save" viewBox="0 0 24 24">
-        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"></path>
+        <path
+          d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"
+        ></path>
         <path d="M17 21v-8H7v8M7 3v5h8"></path>
       </symbol>
       <symbol id="i-refresh" viewBox="0 0 24 24">
@@ -32,7 +34,9 @@
         <path d="M14 14h2v2h-2zM18 14h2v4h-2zM14 18h4v2h-4z"></path>
       </symbol>
       <symbol id="i-cloud" viewBox="0 0 24 24">
-        <path d="M17.5 19H8a5 5 0 1 1 1.1-9.9A6.5 6.5 0 0 1 21 12.8 3.6 3.6 0 0 1 17.5 19Z"></path>
+        <path
+          d="M17.5 19H8a5 5 0 1 1 1.1-9.9A6.5 6.5 0 0 1 21 12.8 3.6 3.6 0 0 1 17.5 19Z"
+        ></path>
       </symbol>
       <symbol id="i-edit" viewBox="0 0 24 24">
         <path d="M12 20h9"></path>
@@ -55,8 +59,22 @@
           </div>
         </div>
         <div class="view-switch" role="tablist" aria-label="界面切换">
-          <button class="ghost is-active" data-view="dashboard" type="button" title="签到控制台">签到</button>
-          <button class="ghost" data-view="shop" type="button" title="店铺商品兑换">兑换</button>
+          <button
+            class="ghost is-active"
+            data-view="dashboard"
+            type="button"
+            title="签到控制台"
+          >
+            签到
+          </button>
+          <button
+            class="ghost"
+            data-view="shop"
+            type="button"
+            title="店铺商品兑换"
+          >
+            兑换
+          </button>
         </div>
         <div class="actions" data-view-actions="dashboard">
           <button class="ghost" id="refreshBtn" type="button" title="刷新">
@@ -91,134 +109,181 @@
         </section>
 
         <section class="app-layout">
-        <div class="config-column">
-          <details class="panel" open>
-            <summary>
-              <span>
-                <strong>账号</strong>
-                <small>添加后扫码登录</small>
-              </span>
-              <span class="disclosure" aria-hidden="true"></span>
-            </summary>
-            <div class="section-toolbar">
-              <button class="ghost" id="addAccountBtn" type="button" title="添加账号">
-                <svg><use href="#i-plus"></use></svg>
-                <span>添加</span>
-              </button>
-            </div>
-            <div id="accounts"></div>
-          </details>
-
-          <details class="panel" open>
-            <summary>
-              <span>
-                <strong>任务配置</strong>
-                <small>游戏社区、云游戏与米游币任务</small>
-              </span>
-              <span class="disclosure" aria-hidden="true"></span>
-            </summary>
-            <div class="task-group" id="gameTaskGroup">
-              <label class="check-row task-switch">
-                <input id="gameCheckin" type="checkbox" data-autosave />
-                <span>游戏社区签到</span>
-              </label>
-              <div class="chips" id="gameChips"></div>
-            </div>
-            <div class="task-group" id="cloudGameTaskGroup">
-              <label class="check-row task-switch">
-                <input id="cloudGameCheckin" type="checkbox" data-autosave />
-                <span>云游戏签到</span>
-              </label>
-              <div class="chips" id="cloudGameChips"></div>
-            </div>
-            <div class="task-group" id="bbsTaskGroup">
-              <label class="check-row task-switch">
-                <input id="bbsTasks" type="checkbox" data-autosave />
-                <span>米游币任务</span>
-              </label>
-              <div class="form-grid two compact" id="bbsTaskOptions">
-                <label class="check-row"><input id="bbsCheckin" type="checkbox" data-autosave /><span>社区签到</span></label>
-                <label class="check-row"><input id="bbsRead" type="checkbox" data-autosave /><span>看帖</span></label>
-                <label class="check-row"><input id="bbsLike" type="checkbox" data-autosave /><span>点赞</span></label>
-                <label class="check-row"><input id="bbsShare" type="checkbox" data-autosave /><span>分享</span></label>
+          <div class="config-column">
+            <details class="panel" open>
+              <summary>
+                <span>
+                  <strong>账号</strong>
+                  <small>添加后扫码登录</small>
+                </span>
+                <span class="disclosure" aria-hidden="true"></span>
+              </summary>
+              <div class="section-toolbar">
+                <button
+                  class="ghost"
+                  id="addAccountBtn"
+                  type="button"
+                  title="添加账号"
+                >
+                  <svg><use href="#i-plus"></use></svg>
+                  <span>添加</span>
+                </button>
               </div>
-            </div>
-          </details>
+              <div id="accounts"></div>
+            </details>
 
-          <details class="panel">
-            <summary>
-              <span>
-                <strong>每日调度</strong>
-                <small>自动运行</small>
-              </span>
-              <span class="disclosure" aria-hidden="true"></span>
-            </summary>
-            <label class="check-row">
-              <input id="scheduleEnable" type="checkbox" data-autosave />
-              <span>启用每日自动执行</span>
-            </label>
-            <div class="form-grid two">
-              <label>
-                <span>执行时间</span>
-                <input id="scheduleTime" type="time" data-autosave />
-              </label>
-              <label>
-                <span>随机波动分钟</span>
-                <input id="scheduleJitter" type="number" min="0" max="720" step="1" data-autosave />
-              </label>
-            </div>
-            <label class="check-row">
-              <input id="runOnStart" type="checkbox" data-autosave />
-              <span>启动后执行一次</span>
-            </label>
-          </details>
-
-          <details class="panel">
-            <summary>
-              <span>
-                <strong>推送通道</strong>
-                <small>任务结束后通知</small>
-              </span>
-              <span class="disclosure" aria-hidden="true"></span>
-            </summary>
-            <label class="check-row">
-              <input id="pushErrorOnly" type="checkbox" data-autosave />
-              <span>仅失败时推送</span>
-            </label>
-            <div class="push-channel-list" id="pushChannels"></div>
-          </details>
-
-          <details class="panel">
-            <summary>
-              <span>
-                <strong>验证码识别</strong>
-                <small>默认关闭，启用请配置打码平台</small>
-              </span>
-              <span class="disclosure" aria-hidden="true"></span>
-            </summary>
-            <div class="form-grid compact">
-              <label>
-                <span>重试次数</span>
-                <input id="captchaMaxRetries" type="number" min="1" max="10" step="1" data-autosave />
-              </label>
-            </div>
-            <div class="push-channel-list" id="captchaChannels"></div>
-          </details>
-
-        </div>
-
-        <aside class="side-column">
-          <article class="panel log-panel">
-            <div class="panel-head">
-              <div>
-                <h2>日志</h2>
-                <p>最近记录</p>
+            <details class="panel" open>
+              <summary>
+                <span>
+                  <strong>任务配置</strong>
+                  <small>游戏社区、云游戏与米游币任务</small>
+                </span>
+                <span class="disclosure" aria-hidden="true"></span>
+              </summary>
+              <div class="task-group" id="gameTaskGroup">
+                <label class="check-row task-switch">
+                  <input id="gameCheckin" type="checkbox" data-autosave />
+                  <span>游戏社区签到</span>
+                </label>
+                <div class="chips" id="gameChips"></div>
               </div>
-            </div>
-            <pre id="logs" class="logs"></pre>
-          </article>
-        </aside>
-      </section>
+              <div class="task-group" id="cloudGameTaskGroup">
+                <label class="check-row task-switch">
+                  <input id="cloudGameCheckin" type="checkbox" data-autosave />
+                  <span>云游戏签到</span>
+                </label>
+                <div class="chips" id="cloudGameChips"></div>
+              </div>
+              <div class="task-group" id="bbsTaskGroup">
+                <label class="check-row task-switch">
+                  <input id="bbsTasks" type="checkbox" data-autosave />
+                  <span>米游币任务</span>
+                </label>
+                <div class="form-grid two compact" id="bbsTaskOptions">
+                  <label class="check-row"
+                    ><input
+                      id="bbsCheckin"
+                      type="checkbox"
+                      data-autosave
+                    /><span>社区签到</span></label
+                  >
+                  <label class="check-row"
+                    ><input id="bbsRead" type="checkbox" data-autosave /><span
+                      >看帖</span
+                    ></label
+                  >
+                  <label class="check-row"
+                    ><input id="bbsLike" type="checkbox" data-autosave /><span
+                      >点赞</span
+                    ></label
+                  >
+                  <label class="check-row"
+                    ><input id="bbsShare" type="checkbox" data-autosave /><span
+                      >分享</span
+                    ></label
+                  >
+                </div>
+              </div>
+            </details>
+
+            <details class="panel">
+              <summary>
+                <span>
+                  <strong>每日调度</strong>
+                  <small>自动运行</small>
+                </span>
+                <span class="disclosure" aria-hidden="true"></span>
+              </summary>
+              <label class="check-row">
+                <input id="scheduleEnable" type="checkbox" data-autosave />
+                <span>启用每日自动执行</span>
+              </label>
+              <div class="form-grid two">
+                <label>
+                  <span>执行时间</span>
+                  <input id="scheduleTime" type="time" data-autosave />
+                </label>
+                <label>
+                  <span>随机波动分钟</span>
+                  <input
+                    id="scheduleJitter"
+                    type="number"
+                    min="0"
+                    max="720"
+                    step="1"
+                    data-autosave
+                  />
+                </label>
+              </div>
+              <label class="check-row">
+                <input id="runOnStart" type="checkbox" data-autosave />
+                <span>启动后执行一次</span>
+              </label>
+            </details>
+
+            <details class="panel">
+              <summary>
+                <span>
+                  <strong>推送通道</strong>
+                  <small>任务结束后通知</small>
+                </span>
+                <span class="disclosure" aria-hidden="true"></span>
+              </summary>
+              <div class="section-toolbar">
+                <button
+                  class="ghost"
+                  id="pushTestBtn"
+                  type="button"
+                  title="测试所有启用的推送渠道"
+                >
+                  <svg><use href="#i-play"></use></svg>
+                  <span>测试推送</span>
+                </button>
+              </div>
+              <label class="check-row">
+                <input id="pushErrorOnly" type="checkbox" data-autosave />
+                <span>仅失败时推送</span>
+              </label>
+              <div class="push-channel-list" id="pushChannels"></div>
+            </details>
+
+            <details class="panel">
+              <summary>
+                <span>
+                  <strong>验证码识别</strong>
+                  <small>默认关闭，启用请配置打码平台</small>
+                </span>
+                <span class="disclosure" aria-hidden="true"></span>
+              </summary>
+              <div class="form-grid compact">
+                <label>
+                  <span>重试次数</span>
+                  <input
+                    id="captchaMaxRetries"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="1"
+                    data-autosave
+                  />
+                </label>
+              </div>
+              <div class="push-channel-list" id="captchaChannels"></div>
+            </details>
+          </div>
+
+          <aside class="side-column">
+            <article class="panel log-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>日志</h2>
+                  <p>最近记录</p>
+                </div>
+              </div>
+              <pre id="logs" class="logs"></pre>
+            </article>
+          </aside>
+        </section>
       </section>
 
       <section class="view-panel is-hidden" data-view-panel="shop">
@@ -251,7 +316,12 @@
                 </div>
                 <div class="shop-tools">
                   <select id="shopGameFilter" aria-label="商品分区"></select>
-                  <button class="ghost" id="shopRefreshBtn" type="button" title="刷新商品">
+                  <button
+                    class="ghost"
+                    id="shopRefreshBtn"
+                    type="button"
+                    title="刷新商品"
+                  >
                     <svg><use href="#i-refresh"></use></svg>
                     <span>刷新商品</span>
                   </button>
@@ -276,14 +346,28 @@
               <div class="form-grid two compact">
                 <label>
                   <span>到点后重试秒数</span>
-                  <input id="shopRetrySeconds" type="number" min="0" max="30" step="0.5" data-autosave />
+                  <input
+                    id="shopRetrySeconds"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="0.5"
+                    data-autosave
+                  />
                 </label>
                 <label>
                   <span>失败重试间隔</span>
-                  <input id="shopRetryInterval" type="number" min="0.05" max="5" step="0.05" data-autosave />
+                  <input
+                    id="shopRetryInterval"
+                    type="number"
+                    min="0.05"
+                    max="5"
+                    step="0.05"
+                    data-autosave
+                  />
                 </label>
               </div>
-              <label class="check-row" style="margin-top: 12px;">
+              <label class="check-row" style="margin-top: 12px">
                 <input id="shopPush" type="checkbox" data-autosave />
                 <span>发送兑换结果推送（复用签到推送配置）</span>
               </label>
@@ -293,7 +377,9 @@
               <div class="panel-head">
                 <div>
                   <h2>兑换计划</h2>
-                  <p>可为实体商品填写地址 ID，为虚拟商品填写游戏 UID 和服务器</p>
+                  <p>
+                    可为实体商品填写地址 ID，为虚拟商品填写游戏 UID 和服务器
+                  </p>
                 </div>
               </div>
               <div id="shopPlans" class="shop-plans"></div>
