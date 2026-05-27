@@ -1440,9 +1440,12 @@ function buildAddressOptions(addresses, selectedId) {
 
 async function loadAllPlanAddresses() {
   const plans = config.shop_exchange?.plans || [];
+  const tasks = [];
   for (let i = 0; i < plans.length; i++) {
-    refreshShopPlanAddresses(i).catch(() => {});
+    tasks.push(refreshShopPlanAddresses(i).catch(() => {}));
   }
+  await Promise.all(tasks);
+  autoSaveConfig().catch(() => {});
 }
 
 function shopRoleDisplay(plan) {
