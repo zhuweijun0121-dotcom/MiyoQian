@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable
 
 from .. import constants as c
+from ..auth.login import refresh_cookie_token
 from ..core import captcha, cookies, crypto
 from ..core.http import ApiClient
 
@@ -148,12 +149,15 @@ class BbsTasks:
             "Cookie": str(self.account.get("cookie") or ""),
         }
 
-    def _task_state(self) -> dict[str, Any]:
+    def _task_state(self, retried: bool = False) -> dict[str, Any]:
         data = self.client.get_json(
             c.BBS_TASKS_URL,
             params={"point_sn": "myb"},
             headers=self._web_headers(),
         )
+        if data.get("retcode") == -100 and not retried:
+            if refresh_cookie_token(self.client, self.account):
+                return self._task_state(retried=True)
         return data.get("data", {}) if data.get("retcode") == 0 else {}
 
     def _task_flags(self, state: dict[str, Any]) -> dict[str, Any]:

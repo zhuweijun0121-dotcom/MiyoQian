@@ -50,6 +50,7 @@ def build_cookie(uid: str, mid: str, ltoken: str, cookie_token: str) -> str:
         f"ltoken={ltoken}",
         f"ltuid={uid}",
         f"ltuid_v2={uid}",
+        f"login_uid={uid}",
     ]
     return "; ".join(parts)
 
