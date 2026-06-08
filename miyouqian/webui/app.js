@@ -34,6 +34,7 @@ let autoSaveTimer = null;
 let isSavingConfig = false;
 let lastLoginStatus = "";
 let activeLoginIndex = null;
+let loginErrorCollapseTimer = null;
 let editingAccountIndex = null;
 let expandedCloudAccounts = new Set();
 let editingPushProviders = new Set();
@@ -1882,6 +1883,20 @@ function renderLoginSlot(login) {
   const index = login.account_index ?? activeLoginIndex ?? -1;
   const slot = document.querySelector(`[data-login-slot="${index}"]`);
   if (!slot) return;
+
+  // 当登录失败且不在运行状态时，5秒后自动折叠
+  if (login.status === "error" && !login.running) {
+    if (loginErrorCollapseTimer) clearTimeout(loginErrorCollapseTimer);
+    loginErrorCollapseTimer = setTimeout(() => {
+      activeLoginIndex = null;
+      renderLoginSlot({ running: false, status: "idle" });
+      loginErrorCollapseTimer = null;
+    }, 5000);
+  } else if (loginErrorCollapseTimer) {
+    clearTimeout(loginErrorCollapseTimer);
+    loginErrorCollapseTimer = null;
+  }
+
   slot.classList.add("active");
   if (login.qr) {
     slot.innerHTML = `
