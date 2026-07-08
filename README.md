@@ -1092,7 +1092,13 @@ uv run python main.py serve --port 5891
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=marchen-orz/MiyoQian&type=Date)](https://star-history.com/#marchen-orz/MiyoQian&Date)
+<a href="https://www.star-history.com/?repos=marchen-orz%2FMiyoQian&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&theme=dark&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+ </picture>
+</a>
 
 ## 免责声明
 
