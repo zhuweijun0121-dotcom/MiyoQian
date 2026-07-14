@@ -69,7 +69,6 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         id: version
         run: |
-          export https_proxy=http://192.168.1.5:7890
           # 从 Docker Hub 获取当前最新版本号，自动 +1
           CURRENT=$(curl -s --connect-timeout 15 \
             "https://hub.docker.com/v2/repositories/zhu822560687/miyoqian/tags/?page_size=50&ordering=last_updated" | \
