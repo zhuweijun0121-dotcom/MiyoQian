@@ -1,25 +1,23 @@
+version: '3.8'
+
 services:
-  miyouqian:
+  miyoqian:
+    # ── 方式一：从源码构建（适合开发者，改代码后 docker compose up --build） ──
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: miyouqian
+
+    # ── 方式二：直接拉预构建镜像（适合快速部署，无需构建过程） ──
+    # image: zhu822560687/miyoqian:latest
+    # 运行：docker compose pull && docker compose up
+
+    container_name: miyoqian
     restart: unless-stopped
-    init: true
     ports:
       - "5890:5890"
     volumes:
-      # Docker 专用状态卷：配置、登录凭证和日志均保存在容器隔离环境中
-      - miyouqian_state:/app/state
+      - ../config.yaml:/app/config.yaml   # 配置文件（首次启动会自动从 config.example.yaml 生成）
+      - ../data:/app/data                  # 登录凭证（必须持久化）
+      - ../logs:/app/logs                  # 日志
     environment:
       - TZ=Asia/Shanghai
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-
-volumes:
-  miyouqian_state:
