@@ -113,10 +113,11 @@ def _send_exchange(
     mail_from = str(push.get("mail_from") or smtp_user).strip()
     mail_to = str(push.get("mail_to") or "").strip()
     smtp_ssl = bool(push.get("smtp_ssl", True))
+    api_url = str(push.get("api_url") or "").strip()
 
     if provider == "pushplus":
         require(token, "token")
-        url = "https://www.pushplus.plus/send"
+        url = api_url or "https://www.pushplus.plus/send"
         payload = pushplus_payload(
             token, title, build_exchange_html(title, goods_name, result, plan, success), "html", topic
         )
@@ -132,7 +133,7 @@ def _send_exchange(
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = api_url or f"https://api.telegram.org/bot{token}/sendMessage"
         request_json(
             client,
             "POST",
@@ -204,12 +205,13 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     mail_from = str(push.get("mail_from") or smtp_user).strip()
     mail_to = str(push.get("mail_to") or "").strip()
     smtp_ssl = bool(push.get("smtp_ssl", True))
+    api_url = str(push.get("api_url") or "").strip()
     markdown_message = build_push_markdown(title, message, success)
     plain_message = build_push_text(title, message, success)
 
     if provider == "pushplus":
         require(token, "token")
-        url = "https://www.pushplus.plus/send"
+        url = api_url or "https://www.pushplus.plus/send"
         payload = pushplus_payload(token, title, build_push_html(title, message, success), "html", topic)
         try:
             request_json(client, "POST", url, json=payload)
@@ -220,7 +222,7 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = api_url or f"https://api.telegram.org/bot{token}/sendMessage"
         request_json(
             client,
             "POST",

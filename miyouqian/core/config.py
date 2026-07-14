@@ -182,9 +182,9 @@ def normalize_config(config: dict[str, Any]) -> None:
         bbs = {}
         config["bbs"] = bbs
     bbs["checkin"] = parse_bool(bbs.get("checkin", True))
-    bbs["read"] = False
-    bbs["like"] = False
-    bbs["share"] = False
+    bbs.setdefault("read", False)
+    bbs.setdefault("like", False)
+    bbs.setdefault("share", False)
     normalize_shop_exchange(config)
 
 
