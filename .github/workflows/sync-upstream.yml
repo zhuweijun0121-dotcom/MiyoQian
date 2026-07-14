@@ -1,0 +1,134 @@
+name: Sync Upstream & Build
+
+on:
+  schedule:
+    # 每8小时检查一次上游是否有更新
+    - cron: "0 */8 * * *"
+  workflow_dispatch:  # 手动触发也能用
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-build
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: 同步上游 + 构建推送
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 配置 git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 添加上游远程仓库
+        run: |
+          git remote add upstream https://github.com/Marchen-orz/MiyoQian.git || true
+
+      - name: 检查上游是否有更新
+        id: check
+        run: |
+          git fetch upstream master
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/master)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "✅ 上游无更新，跳过"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            COMMITS=$(git log --oneline "$LOCAL".."$UPSTREAM" | head -5)
+            echo "上游新提交:"
+            echo "$COMMITS"
+            echo "commits<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$COMMITS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 合并上游更新
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git merge upstream/master --no-edit
+
+      - name: 保存我们的 Docker 配置（防止被上游覆盖）
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          # 如果上游的 Dockerfile/docker-compose/entrypoint 有变化，恢复我们的版本
+          git checkout HEAD~0 -- docker/ 2>/dev/null || true
+
+      - name: 计算新版本号
+        if: steps.check.outputs.changed == 'true'
+        id: version
+        run: |
+          export https_proxy=http://192.168.1.5:7890
+          # 从 Docker Hub 获取当前最新版本号，自动 +1
+          CURRENT=$(curl -s --connect-timeout 15 \
+            "https://hub.docker.com/v2/repositories/zhu822560687/miyoqian/tags/?page_size=50&ordering=last_updated" | \
+            python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          tags = [t['name'] for t in data.get('results', []) if t['name'].startswith('v') and t['name'] != 'latest']
+          # 解析版本号，找到最大的
+          def parse_ver(t):
+              parts = t.lstrip('v').split('.')
+              return tuple(int(p) for p in parts)
+          tags.sort(key=parse_ver, reverse=True)
+          print(tags[0] if tags else 'v6.0.0')
+          ")
+          echo "当前最新版本: $CURRENT"
+          # 递增 patch 版本号
+          MAJOR=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\1/')
+          MINOR=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\2/')
+          PATCH=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\3/')
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "新版本号: $NEW_VERSION"
+
+      - name: 提交版本号变更
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git commit --allow-empty -m "chore(release): ${{ steps.version.outputs.new_version }}"
+
+      - name: 推送到 GitHub
+        if: steps.check.outputs.changed == 'true'
+        run: git push origin master
+
+      - name: 打 Git Tag
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git tag ${{ steps.version.outputs.new_version }}
+          git push origin ${{ steps.version.outputs.new_version }}
+
+      - name: 设置 Docker Buildx
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: zhu822560687
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送镜像
+        if: steps.check.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            zhu822560687/miyoqian:latest
+            zhu822560687/miyoqian:${{ steps.version.outputs.new_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
