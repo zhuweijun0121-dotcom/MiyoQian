@@ -1,0 +1,132 @@
+name: 米游签定时签到
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "执行模式：全部任务=按配置执行；只执行游戏社区/云游戏签到=跳过米游币社区任务；只执行米游币社区任务=跳过游戏社区和云游戏签到"
+        required: true
+        default: "全部任务"
+        type: choice
+        options:
+          - 全部任务
+          - 只执行游戏社区/云游戏签到
+          - 只执行米游币社区任务
+      account:
+        description: "只执行指定账号名，留空执行全部账号"
+        required: false
+        type: string
+  schedule:
+    # 默认每天北京时间 09:20 执行。修改时间时只改 cron 即可。
+    - cron: "20 9 * * *"
+      timezone: "Asia/Shanghai"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miyouqian-checkin
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    name: 执行签到任务
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v6
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --frozen --no-dev
+
+      - name: 写入配置和登录凭证
+        env:
+          MIYOUQIAN_CONFIG: ${{ secrets.MIYOUQIAN_CONFIG }}
+          MIYOUQIAN_CREDENTIALS: ${{ secrets.MIYOUQIAN_CREDENTIALS }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          config = os.environ.get("MIYOUQIAN_CONFIG", "")
+          credentials = os.environ.get("MIYOUQIAN_CREDENTIALS", "")
+          if not config.strip():
+              raise SystemExit("缺少 GitHub Secret: MIYOUQIAN_CONFIG")
+          if not credentials.strip():
+              raise SystemExit("缺少 GitHub Secret: MIYOUQIAN_CREDENTIALS")
+
+          Path("data").mkdir(exist_ok=True)
+          Path("logs").mkdir(exist_ok=True)
+          Path("config.yaml").write_text(config.rstrip() + "\n", encoding="utf-8")
+          Path("data/credentials.yaml").write_text(credentials.rstrip() + "\n", encoding="utf-8")
+          PY
+
+      - name: 执行签到
+        env:
+          RUN_MODE: ${{ inputs.mode || 'all' }}
+          RUN_ACCOUNT: ${{ inputs.account || '' }}
+        run: |
+          set -e
+          cmd=(uv run python main.py run)
+
+          case "${RUN_MODE}" in
+            只执行游戏社区/云游戏签到|只执行游戏签到|games)
+              cmd+=(--games-only)
+              ;;
+            只执行米游币社区任务|bbs)
+              cmd+=(--bbs-only)
+              ;;
+            全部任务|all|"")
+              ;;
+            *)
+              echo "未知执行模式: ${RUN_MODE}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -n "${RUN_ACCOUNT}" ]; then
+            cmd+=(--account "${RUN_ACCOUNT}")
+          fi
+
+          "${cmd[@]}"
+
+      - name: 输出任务摘要
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          log_file = Path("logs/miyouqian.log")
+          if not log_file.exists():
+              print("未生成日志文件")
+              raise SystemExit(0)
+
+          keywords = (
+              "开始执行签到任务",
+              "游戏社区签到汇总",
+              "游戏签到汇总",
+              "云游戏签到汇总",
+              "米游币任务汇总",
+              "社区任务结束",
+              "今日任务已完成",
+              "失败",
+              "推送结果",
+              "签到任务执行完成",
+          )
+          lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+          summary = [line for line in lines if any(keyword in line for keyword in keywords)]
+          for line in summary[-120:]:
+              print(line)
+          PY
