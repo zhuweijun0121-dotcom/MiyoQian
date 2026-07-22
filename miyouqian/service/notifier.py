@@ -13,8 +13,9 @@ import smtplib
 import time
 from datetime import datetime
 from email.message import EmailMessage
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from urllib.parse import quote_plus
+from ..core.onebot import OneBotHTTP
 
 import httpx
 
@@ -197,6 +198,12 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     topic = str(push.get("topic") or "").strip()
     chat_id = str(push.get("chat_id") or "").strip()
     secret = str(push.get("secret") or "").strip()
+    # QQ推送
+    push_url = str(push.get("push_url") or "").strip()
+    access_token = str(push.get("access_token") or "").strip()
+    send_id = str(push.get("send_id") or "").strip()
+    msg_type = str(push.get("msg_type") or "").strip()
+
     smtp_host = str(push.get("smtp_host") or "").strip()
     smtp_port = int(push.get("smtp_port") or 465)
     smtp_user = str(push.get("smtp_user") or "").strip()
@@ -206,6 +213,42 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     smtp_ssl = bool(push.get("smtp_ssl", True))
     markdown_message = build_push_markdown(title, message, success)
     plain_message = build_push_text(title, message, success)
+
+    if provider == "qq":
+        require(push_url, "push_url")
+        require(access_token, "access_token")
+        require(send_id, "send_id")
+        require(msg_type, "msg_type")
+        # 消息类型
+        if msg_type == "group":
+            message_type = 'group'
+            user_id = None
+            group_id = send_id
+        elif msg_type == "private":
+            message_type = 'private'
+            user_id = send_id
+            group_id = None
+
+        lines = message.splitlines()
+
+        prefix_skip = (
+            "正在",
+            "游戏社区签到汇总",
+            "游戏社区成功项",
+            "米游币任务汇总",
+            "米游币成功项",
+        )
+        filtered = []
+        for line in lines:
+            if line.endswith("社区签到成功"):
+                continue
+            if any(line.startswith(p) for p in prefix_skip):
+                continue
+        filtered.append(line)
+
+        bot = OneBotHTTP(base_url = push_url, access_token = access_token)
+        bot.send_msg(user_id = user_id, group_id = group_id, message = filtered, message_type = message_type)
+        return
 
     if provider == "pushplus":
         require(token, "token")
@@ -991,8 +1034,8 @@ def truncate_text(text: str, limit: int) -> str:
     return text[: max(limit - 20, 0)] + "\n... 已截断"
 
 
-def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> None:
-    response = client.request(method, url, **kwargs)
+def request_json(client: httpx.Client, method: str, url: str, headers: Optional[dict], **kwargs: Any) -> None:
+    response = client.request(method, url, headers **kwargs)
     response.raise_for_status()
 
 

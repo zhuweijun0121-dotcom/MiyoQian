@@ -24,6 +24,7 @@ const pushChannelOptions = [
   ["dingrobot", "钉钉机器人"],
   ["feishubot", "飞书机器人"],
   ["email", "邮箱"],
+  ["qq", "QQ推送"]
 ];
 
 const captchaChannelOptions = [["damagou", "打码狗(成本≈0.01元/次)"]];
@@ -309,6 +310,10 @@ function pushChannelFields(provider, channel) {
     topic: channel.topic || "",
     chat_id: channel.chat_id || "",
     secret: channel.secret || "",
+    push_url: channel.push_url || "",
+    access_token: channel.access_token || "",
+    send_id: channel.send_id || "",
+    msg_type: channel.msg_type || "",
     smtp_host: channel.smtp_host || "",
     smtp_port: channel.smtp_port || 465,
     smtp_user: channel.smtp_user || "",
@@ -323,6 +328,21 @@ function pushChannelFields(provider, channel) {
       <input data-push-field="${name}" type="${type}" value="${escapeAttr(common[name] || "")}" autocomplete="off" />
     </label>
   `;
+  const selectBox = (name, label, options) => `
+  <label>
+    <span>${label}</span>
+    <div class="select-wrapper">
+        <select data-push-field="${name}">
+            ${Object.entries(options).map(([value, text]) => `
+            <option value="${escapeAttr(value)}" ${String(value) === String(common[name] || "") ? "selected" : ""}>${escapeHtml(text)}</option>
+            `).join("")}
+        </select>
+    <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+        <use href="#arrow-down"/>
+    </svg>
+    </div>
+  </label>
+`;
   const checkbox = (name, label) => `
     <label class="check-row">
       <input data-push-field="${name}" type="checkbox" ${common[name] ? "checked" : ""} />
@@ -330,7 +350,16 @@ function pushChannelFields(provider, channel) {
     </label>
   `;
   const fields = {
-    pushplus: [field("token", "Token", "password"), field("topic", "群组编码")],
+    pushplus: [
+      field("token", "Token", "password"),
+      field("topic", "群组编码")
+    ],
+    qq: [
+      field("push_url", "HTTP API", "text"),
+      field("access_token", "Access Token", "text"),
+      field("send_id", "Group ID / User ID", "text"),
+      selectBox("msg_type", "推送方式", { group: "QQ群", private: "私信" })
+    ],
     telegram: [
       field("token", "Bot Token", "password"),
       field("chat_id", "Chat ID"),
@@ -350,6 +379,7 @@ function pushChannelFields(provider, channel) {
       checkbox("smtp_ssl", "使用 SSL"),
     ],
   };
+
   return `<div class="push-channel-fields form-grid two compact">${(fields[provider] || []).join("")}</div>`;
 }
 
@@ -399,6 +429,10 @@ function hasPushChannelConfig(channel) {
     "topic",
     "chat_id",
     "secret",
+    "push_url",
+    "access_token",
+    "send_id",
+    "msg_type",
     "smtp_host",
     "smtp_user",
     "smtp_password",
@@ -411,6 +445,7 @@ function hasPushChannelConfig(channel) {
 function pushChannelFieldNames(provider) {
   const fields = {
     pushplus: ["token", "topic"],
+    qq: ["push_url", "access_token", "send_id", "msg_type"],
     telegram: ["token", "chat_id"],
     dingrobot: ["webhook", "secret"],
     feishubot: ["webhook"],
@@ -892,19 +927,20 @@ function collectPushChannel(row) {
   const toggle = row.querySelector("[data-push-toggle]");
   const provider = row.dataset.pushProvider;
   const channel = emptyPushChannel(provider);
-  channel.enable = Boolean(toggle?.checked);
+  channel.enable = Boolean(toggle ?.checked);
   row.querySelectorAll("[data-push-field]").forEach((field) => {
     if (field.dataset.pushField === "smtp_ssl") {
-      channel.smtp_ssl =
-        field.type === "checkbox" ? field.checked : field.value === "true";
-    } else if (field.type === "checkbox") {
-      channel[field.dataset.pushField] = field.checked;
-    } else if (field.dataset.pushField === "smtp_port") {
-      channel.smtp_port = Number(field.value || 465);
-    } else {
-      channel[field.dataset.pushField] = field.value.trim();
-    }
-  });
+    channel.smtp_ssl = field.type === "checkbox" ? field.checked: field.value === "true";
+  } else if (field.type === "checkbox") {
+    channel[field.dataset.pushField] = field.checked;
+  } else if (field.tagName === "SELECT") {
+    channel[field.dataset.pushField] = field.value;
+  } else if (field.dataset.pushField === "smtp_port") {
+    channel.smtp_port = Number(field.value || 465);
+  } else {
+    channel[field.dataset.pushField] = field.value.trim();
+  }
+});
   return channel;
 }
 
@@ -1106,7 +1142,12 @@ function shopPlanRow(plan, index) {
       <div class="form-grid two compact">
         <label>
           <span>执行账号</span>
-          <select data-shop-plan-field="account_index" data-autosave>${accountOptions}</select>
+          <div class="select-wrapper">
+             <select data-shop-plan-field="account_index" data-autosave>${accountOptions}</select>
+             <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                 <use href="#arrow-down"/>
+             </svg>
+          </div>
         </label>
         <label>
           <span>兑换时间</span>
@@ -1115,9 +1156,14 @@ function shopPlanRow(plan, index) {
         ${Number(plan.type || 0) !== 2 ? `
         <label>
           <span>收货地址</span>
-          <select data-shop-plan-field="address_id" data-autosave data-address-select>
-            ${shopPlanAddressSelectHtml(plan)}
-          </select>
+          <div class="select-wrapper">
+            <select data-shop-plan-field="address_id" data-autosave data-address-select>
+                ${shopPlanAddressSelectHtml(plan)}
+            </select>
+             <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                 <use href="#arrow-down"/>
+             </svg>
+          </div>
         </label>` : ""}
         <div class="readonly-field">
           <span>游戏角色</span>
@@ -1564,14 +1610,19 @@ function chooseShopExchangeAccount(good) {
         </div>
         <label>
           <span>执行账号</span>
-          <select id="shopExchangeAccountSelect">
-            ${choices
+          <div class="select-wrapper">
+              <select id="shopExchangeAccountSelect">
+                    ${choices
               .map(
-                ({ account, index }) =>
-                  `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
+                  ({ account, index }) =>
+                    `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
               )
               .join("")}
-          </select>
+              </select>
+              <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                <use href="#arrow-down"/>
+              </svg>
+          </div>
         </label>
         <div class="modal-actions">
           <button class="ghost" type="button" data-modal-cancel>取消</button>
@@ -1626,14 +1677,19 @@ function chooseShopPlanAccount(good) {
         </div>
         <label>
           <span>执行账号</span>
+          <div class="select-wrapper">
           <select id="shopPlanAccountSelect">
             ${choices
               .map(
                 ({ account, index }) =>
-                  `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
-              )
+                `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
+                )
               .join("")}
-          </select>
+            </select>
+            <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                <use href="#arrow-down"/>
+            </svg>
+          </div>
         </label>
         <div class="modal-actions">
           <button class="ghost" type="button" data-modal-cancel>取消</button>
@@ -1773,6 +1829,17 @@ function serverConfig({ includeDrafts = true } = {}) {
   payload.accounts = (payload.accounts || [])
     .filter((account) => includeDrafts || !account._draft)
     .map(({ _draft, ...account }) => account);
+
+  const pushChannels = payload.push?.channels || [];
+  for (const channel of pushChannels) {
+    if (channel.provider === 'qq' && channel.push_url && typeof channel.push_url === 'string') {
+      const url = channel.push_url.trim();
+      if (url && !url.includes('http://')) {
+        throw new Error('QQ 推送的 HTTP API 地址必须包含 "http://"');
+      }
+    }
+  }
+
   return payload;
 }
 
@@ -2687,6 +2754,70 @@ function switchView(view) {
     loadShopGoods().catch((error) => showToast(error.message));
   }
 }
+function initSelectArrows() {
+  // 使用 mousedown 切换旋转状态（比 click 更早触发，且不会干扰下拉展开）
+  document.addEventListener('mousedown', function(e) {
+    const select = e.target.closest('select');
+    if (!select) return;
+    const wrapper = select.closest('.select-wrapper');
+    if (!wrapper) return;
+    // 阻止冒泡，避免外部点击监听误判
+    e.stopPropagation();
+    // 切换旋转状态
+    wrapper.classList.toggle('arrow-rotated');
+  });
+
+  // 选择选项后关闭下拉 → 恢复旋转状态
+  document.addEventListener('change', function(e) {
+    const select = e.target.closest('select');
+    if (!select) return;
+    const wrapper = select.closest('.select-wrapper');
+    if (!wrapper) return;
+    wrapper.classList.remove('arrow-rotated');
+  });
+
+  // 失去焦点时恢复（键盘操作或点击外部）
+  document.addEventListener('blur', function(e) {
+    const select = e.target.closest('select');
+    if (!select) return;
+    const wrapper = select.closest('.select-wrapper');
+    if (!wrapper) return;
+    // 延迟检查，让浏览器先完成焦点切换
+    setTimeout(() => {
+      if (!select.matches(':focus')) {
+        wrapper.classList.remove('arrow-rotated');
+      }
+    }, 10);
+  }, true); // 捕获阶段
+
+  // 点击页面空白处（非 select 区域）移除所有旋转状态
+  document.addEventListener('click', function(e) {
+    // 如果点击发生在 .select-wrapper 内部，则不处理（避免干扰）
+    if (e.target.closest('.select-wrapper')) return;
+    // 移除所有旋转类
+    document.querySelectorAll('.select-wrapper.arrow-rotated').forEach(w => {
+      w.classList.remove('arrow-rotated');
+    });
+  });
+}
+
+function injectArrowSymbol() {
+  if (document.querySelector('#arrow-down')) return;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.style.display = 'none';
+  const symbol = document.createElementNS('http://www.w3.org/2000/svg', 'symbol');
+  symbol.id = 'arrow-down';
+  symbol.setAttribute('viewBox', '0 0 10 6');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M1 1l4 4 4-4');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.5');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke-linecap', 'round');
+  symbol.appendChild(path);
+  svg.appendChild(symbol);
+  document.body.prepend(svg);
+}
 
 function bindEvents() {
   document
@@ -2838,6 +2969,8 @@ function showAuthPage(passwordSet) {
 }
 
 function startApp() {
+  initSelectArrows()
+  injectArrowSymbol()
   loadConfig()
     .then(refreshStatus)
     .catch((error) => {
