@@ -28,10 +28,107 @@ body {
   font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
   line-height: 1.5;
 }
+.select-wrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.select-wrapper select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  width: 100%;
+  padding: 6px 32px 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.select-wrapper select::-ms-expand {
+  display: none;
+}
+
+.select-wrapper .select-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%) rotate(0deg);
+  pointer-events: none; /* 点击箭头穿透到 select */
+  color: #666;
+  transition: transform 0.25s ease;
+}
+
+/* 旋转状态（由 JS 控制） */
+.select-wrapper.arrow-rotated .select-arrow {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+/* 分页容器 */
+.shop-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 0 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+  margin-top: 12px;
+}
+
+/* 页码按钮 */
+.shop-pagination .page-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text-secondary, #6b7280);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.shop-pagination .page-btn:hover:not(:disabled) {
+  /* background: var(--bg-hover, #f3f4f6); */
+  border-color: var(--border-color, #d1d5db);
+}
+
+.shop-pagination .page-btn.is-active {
+  background: var(--primary-color, #3b82f6);
+  color: #fff;
+  border-color: var(--primary-color, #3b82f6);
+}
+
+.shop-pagination .page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 页码省略号 */
+.shop-pagination .page-ellipsis {
+  padding: 0 4px;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 14px;
+  user-select: none;
+}
+
+/* 页数信息 */
+.shop-pagination .page-info {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  user-select: none;
+}
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }

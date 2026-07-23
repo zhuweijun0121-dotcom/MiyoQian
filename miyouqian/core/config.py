@@ -267,6 +267,7 @@ def normalize_cloud_game_enabled(value: Any) -> list[str]:
 
 PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "pushplus": ("token", "topic"),
+    "qq": ("push_url", "access_token", "send_id", "msg_type"),
     "telegram": ("token", "chat_id"),
     "dingrobot": ("webhook", "secret"),
     "feishubot": ("webhook",),
@@ -274,7 +275,7 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
-    allowed = {"pushplus", "telegram", "dingrobot", "feishubot", "email"}
+    allowed = {"pushplus", "telegram", "dingrobot", "feishubot", "email", "qq"}
     raw_channels = push.get("channels")
     if not isinstance(raw_channels, list):
         raw_channels = []

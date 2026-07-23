@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.idea/
 venv/
 config.yaml
 qrcode.png
