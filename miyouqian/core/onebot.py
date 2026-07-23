@@ -1,5 +1,6 @@
 import requests
 from typing import Optional, Dict, Any
+from ..core.http import ApiClient
 
 class OneBotHTTP:
     def __init__(self, base_url: str = "", access_token: Optional[str] = None):
@@ -7,6 +8,7 @@ class OneBotHTTP:
         :param base_url: OneBot 服务端地址，默认为 http://127.0.0.1:5700
         :param access_token: 如果配置了鉴权 token，请传入
         """
+        self.client = ApiClient()
         self.base_url = base_url.rstrip('/')
         self.headers = {
             'Content-Type': 'application/json',
@@ -22,12 +24,14 @@ class OneBotHTTP:
         :return: 解析后的 JSON 响应
         """
         url = f"{self.base_url}/{action}"
-        resp = requests.post(url, json=params or {}, headers=self.headers)
-        resp.raise_for_status()  # 抛出 HTTP 错误
-        data = resp.json()
-        if data.get('status') == 'failed':
-            raise Exception(f"API call failed: {data.get('msg', data.get('retcode', 'unknown error'))}")
-        return data
+        resp = self.client.post_json(
+            url = url,
+            headers = self.headers,
+            params = params
+        )
+        if resp.get('status') == 'failed':
+            raise Exception(f"API call failed: {resp.get('msg', resp.get('retcode', 'unknown error'))}")
+        return resp
 
     def send_msg(self, message_type: str, user_id: Optional[int] = None, group_id: Optional[int] = None, message: str = '', auto_escape: bool = False) -> Dict[str, Any]:
         """通用发送消息（type='private' 或 'group'）"""

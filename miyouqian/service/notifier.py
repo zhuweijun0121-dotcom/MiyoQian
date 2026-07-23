@@ -244,11 +244,16 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
                 continue
             if any(line.startswith(p) for p in prefix_skip):
                 continue
-        filtered.append(line)
+            filtered.append(line)
 
         bot = OneBotHTTP(base_url = push_url, access_token = access_token)
-        bot.send_msg(user_id = user_id, group_id = group_id, message = filtered, message_type = message_type)
+        try:
+            bot.send_msg(user_id = user_id, group_id = group_id, message = '\n'.join(filtered), message_type = message_type)
+        except Exception as ex:
+            raise ValueError(f"QQ推送通道暂不可用，{ex}")
         return
+
+
 
     if provider == "pushplus":
         require(token, "token")
@@ -1034,8 +1039,8 @@ def truncate_text(text: str, limit: int) -> str:
     return text[: max(limit - 20, 0)] + "\n... 已截断"
 
 
-def request_json(client: httpx.Client, method: str, url: str, headers: Optional[dict], **kwargs: Any) -> None:
-    response = client.request(method, url, headers **kwargs)
+def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> None:
+    response = client.request(method, url, **kwargs)
     response.raise_for_status()
 
 
