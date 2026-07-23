@@ -9,6 +9,9 @@
   </head>
   <body>
     <svg aria-hidden="true" class="icon-sprite">
+      <symbol id="arrow-down" viewBox="0 0 10 6">
+        <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      </symbol>
       <symbol id="i-play" viewBox="0 0 24 24">
         <path d="M8 5v14l11-7z"></path>
       </symbol>
@@ -325,12 +328,20 @@
                   <p>商品图片、兑换时间、库存、价格与限购信息</p>
                 </div>
                 <div class="shop-tools">
-                  <select id="shopGameFilter" aria-label="商品分区"></select>
+                  <div class="select-wrapper">
+                    <select id="shopGameFilter" aria-label="商品分区"></select>
+                    <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                      <use href="#arrow-down"/>
+                    </svg>
+                  </div>
+                </div>
+                <div class="shop-tools">
+
                   <button
-                    class="ghost"
-                    id="shopRefreshBtn"
-                    type="button"
-                    title="刷新商品"
+                          class="ghost"
+                          id="shopRefreshBtn"
+                          type="button"
+                          title="刷新商品"
                   >
                     <svg><use href="#i-refresh"></use></svg>
                     <span>刷新商品</span>
