@@ -107,6 +107,12 @@ def _send_exchange(
     topic = str(push.get("topic") or "").strip()
     chat_id = str(push.get("chat_id") or "").strip()
     secret = str(push.get("secret") or "").strip()
+    # QQ推送
+    push_url = str(push.get("push_url") or "").strip()
+    access_token = str(push.get("access_token") or "").strip()
+    send_id = str(push.get("send_id") or "").strip()
+    msg_type = str(push.get("msg_type") or "").strip()
+
     smtp_host = str(push.get("smtp_host") or "").strip()
     smtp_port = int(push.get("smtp_port") or 465)
     smtp_user = str(push.get("smtp_user") or "").strip()
@@ -144,6 +150,28 @@ def _send_exchange(
                 "parse_mode": "HTML",
             },
         )
+        return
+
+    if provider == "qq":
+        require(push_url, "push_url")
+        require(access_token, "access_token")
+        require(send_id, "send_id")
+        require(msg_type, "msg_type")
+        if msg_type == "group":
+            message_type = 'group'
+            user_id = None
+            group_id = send_id
+        elif msg_type == "private":
+            message_type = 'private'
+            user_id = send_id
+            group_id = None
+
+        text = build_exchange_text(title, goods_name, result, plan, success)
+        bot = OneBotHTTP(base_url=push_url, access_token=access_token)
+        try:
+            bot.send_msg(user_id=user_id, group_id=group_id, message=text, message_type=message_type)
+        except Exception as ex:
+            raise ValueError(f"QQ推送通道暂不可用，{ex}")
         return
 
     if provider in {"dingrobot", "dingtalk", "钉钉"}:
