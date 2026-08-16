@@ -109,7 +109,8 @@ class ExchangeScheduler:
                     continue
                 if exchange_at <= now:
                     continue
-                desired[attempt_key] = (index, plan, exchange_at)
+                worker_key = self._worker_key(plan, exchange_at)
+                desired[worker_key] = (index, plan, exchange_at)
 
         with self._lock:
             current_keys = set(self._workers.keys())
@@ -119,6 +120,9 @@ class ExchangeScheduler:
 
             removed_workers = [self._workers.pop(k) for k in to_remove]
             new_workers: dict[str, PlanWorker] = {}
+            for key in current_keys & desired_keys:
+                index, plan, _ = desired[key]
+                self._workers[key].update(index, plan)
             for key in to_add:
                 index, plan, exchange_at = desired[key]
                 worker = PlanWorker(index, plan, exchange_at, key, self._run_worker_plan, self.log)
@@ -194,6 +198,11 @@ class ExchangeScheduler:
     def _attempt_key(self, plan: dict[str, Any], exchange_at: int) -> str:
         return f"{plan.get('goods_id', '')}:{exchange_at}"
 
+    def _worker_key(self, plan: dict[str, Any], exchange_at: int) -> str:
+        """生成计划线程唯一键，避免同商品同时间的多账号计划互相覆盖。"""
+        account_index = plan.get("account_index", 0)
+        return f"{account_index}:{self._attempt_key(plan, exchange_at)}"
+
 
 class PlanWorker:
     def __init__(
@@ -220,6 +229,11 @@ class PlanWorker:
 
     def start(self) -> None:
         self._thread.start()
+
+    def update(self, index: int, plan: dict[str, Any]) -> None:
+        """同步配置重排后的计划索引与最新快照。"""
+        self.index = index
+        self.plan = plan
 
     def stop(self) -> None:
         self._stop.set()
