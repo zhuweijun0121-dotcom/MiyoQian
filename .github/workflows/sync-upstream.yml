@@ -5,6 +5,11 @@ on:
     # 每8小时检查一次上游是否有更新
     - cron: "0 */8 * * *"
   workflow_dispatch:  # 手动触发也能用
+    inputs:
+      force_build:
+        description: '跳过更新检查，强制构建镜像'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -42,7 +47,7 @@ jobs:
           LOCAL=$(git rev-parse HEAD)
           UPSTREAM=$(git rev-parse upstream/master)
           NEW_COMMITS=$(git rev-list --count "$LOCAL".."$UPSTREAM")
-          if [ "$NEW_COMMITS" -eq 0 ]; then
+          if [ "$NEW_COMMITS" -eq 0 ] && [ "${{ inputs.force_build }}" != "true" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "✅ 上游无更新，跳过"
           else
@@ -56,18 +61,18 @@ jobs:
           fi
 
       - name: 合并上游更新
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         run: |
           git merge upstream/master --no-edit
 
       - name: 保存我们的 Docker 配置（防止被上游覆盖）
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         run: |
           # 如果上游的 Dockerfile/docker-compose/entrypoint 有变化，恢复我们的版本
           git checkout HEAD~0 -- docker/ 2>/dev/null || true
 
       - name: 计算新版本号
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         id: version
         run: |
           # 从 git tags 获取当前最新版本号（Hub 上的 tag 只有镜像推送成功后才存在，
@@ -82,27 +87,27 @@ jobs:
           echo "新版本号: $NEW_VERSION"
 
       - name: 提交版本号变更
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         run: |
           git commit --allow-empty -m "chore(release): ${{ steps.version.outputs.new_version }}"
 
       - name: 推送到 GitHub
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         run: git push origin master
 
       - name: 设置 Docker Buildx
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         uses: docker/setup-buildx-action@v3
 
       - name: 登录 Docker Hub
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         uses: docker/login-action@v3
         with:
           username: zhu822560687
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: 构建并推送镜像
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -115,7 +120,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: 打 Git Tag（镜像推送成功后）
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
         run: |
           git tag ${{ steps.version.outputs.new_version }}
           git push origin ${{ steps.version.outputs.new_version }}
