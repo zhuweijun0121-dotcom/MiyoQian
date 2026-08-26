@@ -41,13 +41,14 @@ jobs:
           git fetch upstream master
           LOCAL=$(git rev-parse HEAD)
           UPSTREAM=$(git rev-parse upstream/master)
-          if [ "$LOCAL" = "$UPSTREAM" ]; then
+          NEW_COMMITS=$(git rev-list --count "$LOCAL".."$UPSTREAM")
+          if [ "$NEW_COMMITS" -eq 0 ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "✅ 上游无更新，跳过"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             COMMITS=$(git log --oneline "$LOCAL".."$UPSTREAM" | head -5)
-            echo "上游新提交:"
+            echo "上游新提交 ($NEW_COMMITS 个):"
             echo "$COMMITS"
             echo "commits<<EOF" >> "$GITHUB_OUTPUT"
             echo "$COMMITS" >> "$GITHUB_OUTPUT"
@@ -69,27 +70,14 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         id: version
         run: |
-          # 从 Docker Hub 获取当前最新版本号，自动 +1
-          CURRENT=$(curl -s --connect-timeout 15 \
-            "https://hub.docker.com/v2/repositories/zhu822560687/miyoqian/tags/?page_size=50&ordering=last_updated" | \
-            python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          tags = [t['name'] for t in data.get('results', []) if t['name'].startswith('v') and t['name'] != 'latest']
-          # 解析版本号，找到最大的
-          def parse_ver(t):
-              parts = t.lstrip('v').split('.')
-              return tuple(int(p) for p in parts)
-          tags.sort(key=parse_ver, reverse=True)
-          print(tags[0] if tags else 'v6.0.0')
-          ")
-          echo "当前最新版本: $CURRENT"
-          # 递增 patch 版本号
-          MAJOR=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\1/')
-          MINOR=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\2/')
-          PATCH=$(echo "$CURRENT" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\3/')
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          # 从 git tags 获取当前最新版本号（Hub 上的 tag 只有镜像推送成功后才存在，
+          # 用 git tags 避免构建失败后版本号卡住不动）
+          CURRENT=$(git tag --list 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          echo "当前最新版本: v${CURRENT}"
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+          NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "新版本号: $NEW_VERSION"
 
@@ -101,12 +89,6 @@ jobs:
       - name: 推送到 GitHub
         if: steps.check.outputs.changed == 'true'
         run: git push origin master
-
-      - name: 打 Git Tag
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          git tag ${{ steps.version.outputs.new_version }}
-          git push origin ${{ steps.version.outputs.new_version }}
 
       - name: 设置 Docker Buildx
         if: steps.check.outputs.changed == 'true'
@@ -131,3 +113,9 @@ jobs:
             zhu822560687/miyoqian:${{ steps.version.outputs.new_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 打 Git Tag（镜像推送成功后）
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git tag ${{ steps.version.outputs.new_version }}
+          git push origin ${{ steps.version.outputs.new_version }}
