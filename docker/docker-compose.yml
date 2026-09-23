@@ -1,8 +1,11 @@
 services:
   miyouqian:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    # 默认使用 CI 预构建镜像（依赖已打包，部署时无需下载任何环境）
+    image: zhu822560687/miyoqian:latest
+    # 需要改代码时才本地构建：把上面 image: 一行注释掉，取消下面三行注释
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
     container_name: miyouqian
     restart: unless-stopped
     init: true
