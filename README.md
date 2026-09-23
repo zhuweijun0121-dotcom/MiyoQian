@@ -25,7 +25,6 @@
 太久没有玩米游了，回坑就做这个项目，要做完突然发现天塌了，米游社要更新米游币获取规则了，部分用户现在已经不能回帖点赞获取米游币了，不知道官方后续的新规是什么，赶上了好时候，卑微QWQ，不知道以后新的规则还能不能搞自动任务
 
 ### 交流群
-
 如果你有兴趣参与开发，或者在使用过程中遇到问题，可以加入交流群：
 
 <p align="center">
@@ -35,9 +34,7 @@
 ## 功能
 
 ### 最新更新：支持云游戏签到（云原神、云绝区零）！！！
-
 ### 最新更新：支持米游社商品兑换功能！！！
-
 ### 重大更新：支持自动过验证码！！！
 
 - 米游社 APP 扫码登录
@@ -53,14 +50,14 @@
 
 ## 支持的游戏
 
-| 游戏           | 配置名      |
-| -------------- | ----------- |
-| 原神           | `genshin`   |
-| 崩坏：星穹铁道 | `starrail`  |
-| 绝区零         | `zzz`       |
-| 崩坏3          | `honkai3rd` |
-| 未定事件簿     | `tears`     |
-| 崩坏学园2      | `honkai2`   |
+| 游戏 | 配置名 |
+| --- | --- |
+| 原神 | `genshin` |
+| 崩坏：星穹铁道 | `starrail` |
+| 绝区零 | `zzz` |
+| 崩坏3 | `honkai3rd` |
+| 未定事件簿 | `tears` |
+| 崩坏学园2 | `honkai2` |
 
 默认启用原神、崩坏：星穹铁道、绝区零。其他游戏可以在 Web 控制台或配置文件中开启。
 
@@ -68,10 +65,10 @@
 
 云游戏签到默认关闭，当前支持：
 
-| 云游戏     | 配置名     | 状态                                                              |
-| ---------- | ---------- | ----------------------------------------------------------------- |
-| 云原神     | `genshin`  | 支持                                                              |
-| 云绝区零   | `zzz`      | 支持                                                              |
+| 云游戏 | 配置名 | 状态 |
+| --- | --- | --- |
+| 云原神 | `genshin` | 支持 |
+| 云绝区零 | `zzz` | 支持 |
 | 云星穹铁道 | `starrail` | 不可选，云星穹铁道是版本更新赠送 600 分钟，不需要每日签到获取时长 |
 
 云游戏接口使用 `x-rpc-combo_token`，不是普通米游社 cookie。云游戏 Token 按账号单独配置：先在任务配置里打开总开关，选择要执行的云游戏，再点账号行里扫码登录按钮后面的云游戏图标，填写云原神或云绝区零对应 Token。整体启用后，未选择具体云游戏或未配置对应 Token 的账号会自动跳过。
@@ -123,29 +120,29 @@ accounts:
 
 ```yaml
 shop_exchange:
-  enable: true # 是否启用商品兑换功能
-  retry_seconds: 20 # 重试总时长（秒）
-  retry_interval: 0.4 # 重试间隔（秒）
-  plans: [] # 兑换计划列表
+  enable: true          # 是否启用商品兑换功能
+  retry_seconds: 20     # 重试总时长（秒）
+  retry_interval: 0.4   # 重试间隔（秒）
+  plans: []             # 兑换计划列表
 ```
 
 ### 兑换计划配置
 
 每个兑换计划包含以下字段：
 
-| 字段          | 说明                           | 示例        |
-| ------------- | ------------------------------ | ----------- |
-| `goods_id`    | 商品 ID                        | "12345"     |
-| `goods_name`  | 商品名称（可选，用于显示）     | "原神礼包"  |
-| `account`     | 执行兑换的账号名称             | "main"      |
-| `address_id`  | 收货地址 ID（实物商品必需）    | "67890"     |
-| `uid`         | 游戏 UID（游戏内商品必需）     | "100000001" |
-| `region`      | 游戏区服（游戏内商品必需）     | "cn_gf01"   |
-| `game_biz`    | 游戏业务标识（游戏内商品必需） | "hk4e_cn"   |
-| `exchange_at` | 兑换时间戳（秒）               | 1700000000  |
-| `enable`      | 是否启用该计划                 | true        |
-| `auto`        | 是否自动执行                   | true        |
-| `device_fp`   | 设备指纹（自动获取）           | "xxx"       |
+| 字段 | 说明 | 示例 |
+| --- | --- | --- |
+| `goods_id` | 商品 ID | "12345" |
+| `goods_name` | 商品名称（可选，用于显示） | "原神礼包" |
+| `account` | 执行兑换的账号名称 | "main" |
+| `address_id` | 收货地址 ID（实物商品必需） | "67890" |
+| `uid` | 游戏 UID（游戏内商品必需） | "100000001" |
+| `region` | 游戏区服（游戏内商品必需） | "cn_gf01" |
+| `game_biz` | 游戏业务标识（游戏内商品必需） | "hk4e_cn" |
+| `exchange_at` | 兑换时间戳（秒） | 1700000000 |
+| `enable` | 是否启用该计划 | true |
+| `auto` | 是否自动执行 | true |
+| `device_fp` | 设备指纹（自动获取） | "xxx" |
 
 完整配置示例：
 
@@ -234,96 +231,66 @@ A: 可以，每个账号可以添加多个兑换计划，系统会按时间顺�
 
 适合部署在服务器或 NAS 上，无需手动安装 Python 和 uv。
 
-提供两种运行方式：
-
-#### 方式一：使用预构建镜像（快速部署）
-
-无需 Git 克隆，只要 Docker 环境能连上 Docker Hub 即可：
+#### 1. 获取项目文件
 
 ```bash
-# 创建数据目录
-mkdir miyoqian-data && cd miyoqian-data
-
-# 一键启动
-docker run -d \
-  --name miyoqian \
-  -p 5890:5890 \
-  -v $(pwd)/data:/app/data \
-  zhu822560687/miyoqian:latest
-```
-
-或使用 docker-compose（手动创建 `docker-compose.yml`）：
-
-```yaml
-services:
-  miyoqian:
-    image: zhu822560687/miyoqian:latest
-    container_name: miyoqian
-    restart: unless-stopped
-    ports:
-      - "5890:5890"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - TZ=Asia/Shanghai
-```
-
-```bash
-docker compose up -d
-```
-
-#### 方式二：从源码构建（适合开发者）
-
-```bash
-# 1. 获取项目文件
 git clone <你的仓库地址>
 cd 米游社签到
+```
 
-# 2. 构建并启动
+#### 2. 构建并启动
+
+```bash
+# 进入 docker 目录
 cd docker
+
+# 构建并启动（后台运行）
 docker compose up -d --build
 ```
 
-> 两种方式最终效果一样。`docker-compose.yml` 里已同时写好两种配置，切换注释即可。
-
-#### 启动后
-
-浏览器打开 `http://服务器IP:5890` 进入 Web 控制台，扫码登录后即可使用。
+启动成功后，通过端口映射从宿主机访问 `http://localhost:5890` 即可打开 Web 控制台。
 
 > 容器首次启动时会自动从 `config.example.yaml` 生成 `config.yaml`，无需手动操作。
-> 容器内服务已默认监听 `0.0.0.0`（Docker 必需）。
+> 容器内服务已默认监听 `0.0.0.0`（Docker 必需），宿主机通过 `localhost:5890` 访问即可。
 
-#### 常用命令
+#### 3. 常用命令
 
 ```bash
+cd docker
+
 # 查看日志
 docker compose logs -f
 
 # 停止服务
 docker compose down
 
-# 从源码构建时更新（拉取最新代码后重新构建）
-git pull
+# 重新构建（更新代码后）
 docker compose up -d --build
 ```
 
-#### 数据持久化
+#### 4. 数据持久化
 
-`docker-compose.yml` 已配置以下目录的持久化映射：
+`docker-compose.yml` 默认使用 Docker 命名卷保存容器专用数据，不再和项目根目录的 `config.yaml`、`data/`、`logs/` 共用：
 
-| 宿主机路径    | 容器路径           | 说明             |
-| ------------- | ------------------ | ---------------- |
-| `config.yaml` | `/app/config.yaml` | 配置文件         |
-| `data/`       | `/app/data/`       | 登录凭证（敏感） |
-| `logs/`       | `/app/logs/`       | 运行日志         |
+| Docker 卷 | 容器路径 | 说明 |
+| --- | --- | --- |
+| `docker_miyouqian_state` | `/app/state` | Docker 专用配置、登录凭证和运行日志 |
 
-容器重建后数据不会丢失。
+容器重建后数据不会丢失。只有执行 `docker compose down -v` 或手动删除该 Docker 卷时，Docker 环境内的配置和登录凭证才会被删除。
+
+如需查看或备份容器内配置，可以执行：
+
+```bash
+docker compose exec miyouqian sh
+ls -la /app/state
+```
 
 #### 注意事项
 
 - 容器内时区默认为 `Asia/Shanghai`，如需修改可在 `docker-compose.yml` 中调整 `TZ` 环境变量
-- 如需修改端口，同时修改 `docker-compose.yml` 的 `ports` 和 `config.yaml` 的 `web.port`
-- 公网访问需要在宿主机层面配置（开放防火墙端口、反向代理等），首次访问时页面会引导设置密码
+- 默认映射到宿主机所有网卡的 `5890` 端口，局域网或公网访问还需要在宿主机层面配置防火墙、安全组、端口转发或反向代理
+- 如需修改容器内监听端口，同时修改 `docker-compose.yml` 的 `ports` 和 Docker 启动命令中的 `--port`
+- 公网访问时请务必设置 Web 控制台密码，首次访问页面会引导设置密码
 
 ---
 
@@ -342,9 +309,9 @@ docker compose up -d --build
 
 先按“本地部署”或“Docker 部署”完成一次扫码登录，并确认手动执行签到正常。完成后项目目录里会有：
 
-| 文件                    | 说明                                 |
-| ----------------------- | ------------------------------------ |
-| `config.yaml`           | 公开配置，不建议直接提交仓库         |
+| 文件 | 说明 |
+| --- | --- |
+| `config.yaml` | 公开配置，不建议直接提交仓库 |
 | `data/credentials.yaml` | 登录凭证，敏感信息，绝对不要提交仓库 |
 
 #### 2. 创建项目并启用 Actions
@@ -365,9 +332,9 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 
 添加两个 Secret：
 
-| Secret 名称             | 内容                                    |
-| ----------------------- | --------------------------------------- |
-| `MIYOUQIAN_CONFIG`      | 复制 `config.yaml` 的完整内容           |
+| Secret 名称 | 内容 |
+| --- | --- |
+| `MIYOUQIAN_CONFIG` | 复制 `config.yaml` 的完整内容 |
 | `MIYOUQIAN_CREDENTIALS` | 复制 `data/credentials.yaml` 的完整内容 |
 
 粘贴时保留 YAML 原本的换行和缩进。凭证过期、账号变化或推送配置变化后，重新复制最新文件内容覆盖对应 Secret 即可。
@@ -404,11 +371,11 @@ schedule:
 
 `执行模式` 用来决定这一次手动运行要跑哪些任务：
 
-| 选项                        | 说明                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| `全部任务`                  | 默认选项，按 `config.yaml` 中的开关执行游戏社区签到、云游戏签到和米游币社区任务 |
-| `只执行游戏社区/云游戏签到` | 只跑游戏社区签到和云游戏签到，跳过米游币社区任务                                |
-| `只执行米游币社区任务`      | 只跑社区签到、看帖、点赞、分享等米游币任务，跳过游戏社区签到和云游戏签到        |
+| 选项 | 说明 |
+| --- | --- |
+| `全部任务` | 默认选项，按 `config.yaml` 中的开关执行游戏社区签到、云游戏签到和米游币社区任务 |
+| `只执行游戏社区/云游戏签到` | 只跑游戏社区签到和云游戏签到，跳过米游币社区任务 |
+| `只执行米游币社区任务` | 只跑社区签到、看帖、点赞、分享等米游币任务，跳过游戏社区签到和云游戏签到 |
 
 `account` 是可选项，用来只执行某一个账号名；留空则执行 `config.yaml` 中的全部账号。
 
@@ -508,6 +475,66 @@ http://127.0.0.1:5890
 
 每日自动执行依赖当前程序保持运行。关闭终端、电脑关机或休眠后，自动任务不会继续执行。
 
+
+---
+
+### 云函数部署
+云函数和Github Action类似，但是其在执行任务时使用的是云函数提供商的IP地址，理论上比Github Action更难风控些。缺点是可能会产生非常少量的费用（理论每个月上不到0.1元，实测上月运行了7天产生了0.02元费用被抹零不计费），适合已经用过各种云服务商的用户使用。
+
+### 1.配置项目
+参考 [本地部署1-5](#本地部署)
+
+注意：在配置虚拟环境时应使用`uv venv --python 3.10`,因为腾讯云暂时还没有python3.11镜像(如果忘了其实也没关系，因为经过测试3.11安装的依赖在3.10上也能跑，但是最好不要这么做qwq)。
+### 2.打包项目
+```powershell
+uv run python -m pip install -r requirements.txt -t .
+```
+这一步将会把项目需要的依赖直接安装到项目根目录，安装完成后，将项目压缩为.zip备用
+
+### 3.上传项目并配置自动运行
+这里以腾讯云为例（阿里云等其它云服务提供商也有类似服务，方法类似）
+#### 3.1 登录并创建云函数
+打开 [腾讯云函数](https://console.cloud.tencent.com/scf/list)，登录后依次点击
+
+>新建 > 从头开始 
+> 
+>函数类型:事件函数
+> 
+>**运行环境:Python3.10**
+> 
+>时区:Asia/Shanghai
+>
+>提交方法：本地上传zip包
+> 
+>**执行方法：index.main_handler**
+>
+> 函数代码:上传[第二步](#2打包项目)压缩的压缩包
+> 
+> 高级设置：
+> 
+> 初始化超时时间:30
+> 
+> 执行超时时间:600
+
+勾选同意协议后完成创建
+#### 3.2 配置触发器
+创建完成后点击你刚刚创建的云函数，选择触发管理>创建触发器
+>触发周期：自定义触发周期（推荐）
+> 
+> Cron表达式:
+> 
+> 注：这里的Cron表达式和上文中的规则不一样，这里需要7个字段，分别是 
+> 
+> 秒 分钟 小时 日 月 星期 年
+> 
+> 示例：
+> 
+> 每天早上7点30触发：0 30 7 * * * *
+> 
+> 详细参照[定时触发器说明](https://cloud.tencent.com/document/product/583/9708)
+
+---
+
 ## 快速开始
 
 推荐使用 Web 控制台完成所有日常操作。
@@ -580,14 +607,14 @@ http://127.0.0.1:5890
 
 Web 控制台主要分为几块：
 
-| 区域     | 用途                                               |
-| -------- | -------------------------------------------------- |
+| 区域 | 用途 |
+| --- | --- |
 | 顶部状态 | 查看账号数量、自动调度状态、下次执行时间、最近结果 |
-| 账号     | 添加账号、扫码登录、刷新凭证、删除账号             |
-| 任务配置 | 开关游戏社区签到、云游戏签到和米游币任务           |
-| 每日调度 | 设置每天什么时候自动运行                           |
-| 推送通道 | 设置任务完成后的通知方式                           |
-| 日志     | 查看本次启动后的运行记录                           |
+| 账号 | 添加账号、扫码登录、刷新凭证、删除账号 |
+| 任务配置 | 开关游戏社区签到、云游戏签到和米游币任务 |
+| 每日调度 | 设置每天什么时候自动运行 |
+| 推送通道 | 设置任务完成后的通知方式 |
+| 日志 | 查看本次启动后的运行记录 |
 
 日志区域只显示本次 Web 服务启动后的记录。历史日志会保存在 `logs/miyouqian.log`。
 
@@ -764,15 +791,15 @@ bbs:
 
 社区 ID：
 
-| ID  | 社区           |
-| --- | -------------- |
-| `1` | 崩坏3          |
-| `2` | 原神           |
-| `3` | 崩坏2          |
-| `4` | 未定事件簿     |
-| `5` | 大别野         |
+| ID | 社区 |
+| --- | --- |
+| `1` | 崩坏3 |
+| `2` | 原神 |
+| `3` | 崩坏2 |
+| `4` | 未定事件簿 |
+| `5` | 大别野 |
 | `6` | 崩坏：星穹铁道 |
-| `8` | 绝区零         |
+| `8` | 绝区零 |
 
 ### 验证码识别
 
@@ -790,13 +817,13 @@ captcha:
 
 说明：
 
-| 设置                  | 说明                                     |
-| --------------------- | ---------------------------------------- |
-| `max_retries`         | 每次触发验证码后最多重新获取并识别的次数 |
-| `channels[].provider` | 打码渠道，目前支持 `damagou`             |
-| `channels[].enable`   | 是否启用该渠道                           |
-| `channels[].userkey`  | 打码狗用户 `userkey`                     |
-| `channels[].timeout`  | 调用打码接口的超时时间，单位秒           |
+| 设置 | 说明 |
+| --- | --- |
+| `max_retries` | 每次触发验证码后最多重新获取并识别的次数 |
+| `channels[].provider` | 打码渠道，目前支持 `damagou` |
+| `channels[].enable` | 是否启用该渠道 |
+| `channels[].userkey` | 打码狗用户 `userkey` |
+| `channels[].timeout` | 调用打码接口的超时时间，单位秒 |
 
 打码狗的 `type` 默认不需要设置；识别困难时可以在配置文件中给该渠道补 `type: "1006"`，会增加积分消耗。
 
@@ -815,12 +842,12 @@ schedule:
 
 含义：
 
-| 设置             | 说明                            |
-| ---------------- | ------------------------------- |
-| `enable`         | 是否开启每日自动执行            |
-| `time`           | 每天的基准执行时间              |
-| `jitter_minutes` | 随机延后分钟数                  |
-| `run_on_start`   | 启动 Web 服务后是否立即执行一次 |
+| 设置 | 说明 |
+| --- | --- |
+| `enable` | 是否开启每日自动执行 |
+| `time` | 每天的基准执行时间 |
+| `jitter_minutes` | 随机延后分钟数 |
+| `run_on_start` | 启动 Web 服务后是否立即执行一次 |
 
 ### 网络访问与密码
 
@@ -830,9 +857,9 @@ Web 控制台默认只监听本机地址 `127.0.0.1`，只能在本机浏览器�
 
 ```yaml
 web:
-  host: "0.0.0.0" # 监听地址，设为 0.0.0.0 允许外部访问
-  port: 5890 # 监听端口
-  password: "" # 访问密码（见下方说明）
+  host: "0.0.0.0"   # 监听地址，设为 0.0.0.0 允许外部访问
+  port: 5890        # 监听端口
+  password: ""      # 访问密码（见下方说明）
 ```
 
 **密码说明：**
@@ -844,10 +871,10 @@ web:
 - 也可以在配置文件中直接填写明文密码，启动时会自动转换为哈希
 - 服务重启后需要重新输入密码
 
-| 设置       | 说明                                             |
-| ---------- | ------------------------------------------------ |
-| `host`     | 监听地址，`127.0.0.1` 仅本机，`0.0.0.0` 允许外部 |
-| `port`     | 监听端口，默认 `5890`                            |
+| 设置 | 说明 |
+| --- | --- |
+| `host` | 监听地址，`127.0.0.1` 仅本机，`0.0.0.0` 允许外部 |
+| `port` | 监听端口，默认 `5890` |
 | `password` | 访问密码，留空首次通过页面设置，也可直接填写明文 |
 
 ## 推送设置
@@ -1053,16 +1080,16 @@ uv run python main.py serve --port 5891
 
 ## 下一步计划
 
-| 完成 | 计划                                     | 完成时间  |
-| ---- | ---------------------------------------- | --------- |
-| [ ]  | 补充更多游戏渠道签到                     | --        |
-| [✓]  | 新增米游社其他功能，例如米游币兑换功能   | 2026-5-20 |
-| [ ]  | 补充更多推送渠道                         | --        |
-| [ ]  | 优化签到流程，降低风控风险               | --        |
-| [ ]  | 增加配置导入、导出功能                   | --        |
-| [ ]  | 完善产品文档                             | --        |
-| [ ]  | 持续适配米游社规则变化，尽量保持工具可用 | --        |
-| [ ]  | ...                                      | --        |
+| 完成 | 计划 | 完成时间 |
+| --- | --- | --- |
+| [ ] | 补充更多游戏渠道签到 | -- |
+| [x] | 新增米游社其他功能，例如米游币兑换功能 | 2025-01 |
+| [ ] | 补充更多推送渠道 | -- |
+| [ ] | 优化签到流程，降低风控风险 | -- |
+| [ ] | 增加配置导入、导出功能 | -- |
+| [ ] | 完善产品文档 | -- |
+| [ ] | 持续适配米游社规则变化，尽量保持工具可用 | -- |
+| [ ] | ... | -- |
 
 ## 注意事项
 
@@ -1081,7 +1108,13 @@ uv run python main.py serve --port 5891
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Marchen-zcl/MiyoQian&type=Date)](https://star-history.com/#Marchen-zcl/MiyoQian&Date)
+<a href="https://www.star-history.com/?repos=marchen-orz%2FMiyoQian&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&theme=dark&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=marchen-orz/MiyoQian&type=date&legend=top-left&sealed_token=vhjwsuuACDb_LXawTSesqGkBuPYIJlyRBfjCPheEATOVtk6XKQgfA354iSfjKh8YZ4QCdB3axWHYABMpO0J401QGujQHvpHahsp6thneSwwrO-KLnOefX-uozkYik3m7fNZK3QSjokXuwKwg2V8dBT9puj0uGGplCs-ydFHzG8Mrx7YBoGYhfMUtKUYU" />
+ </picture>
+</a>
 
 ## 免责声明
 
