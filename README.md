@@ -78,7 +78,7 @@
 
 云游戏 Token 获取方法（参考 MihoyoBBSTools）：
 
-1. 在浏览器打开对应云游戏网页并登录账号，[云原神](https://ys.mihoyo.com/cloud/#/)，[云绝区零](https://zzz.mihoyo.com/cloud-feat/#/)。
+1. 云绝区零无网页版需抓包获取，参考 https://bili33.top/posts/MHYY-AutoCheckin-Manual-Gen2/#%E9%85%8D%E7%BD%AE%E8%8E%B7%E5%8F%96；云原神在浏览器打开[对应云游戏网页](https://ys.mihoyo.com/cloud/#/)并登录账号。
 2. 打开开发者工具，切到 `Network` / `网络`。
 3. 刷新页面或进入钱包/时长页面，过滤 `wallet/wallet/get`。
 4. 点开返回成功的请求，在请求头里复制 `X-Rpc-Combo_token` 的值。
@@ -728,7 +728,7 @@ accounts:
 
 云游戏 Token 获取方法：
 
-1. 在浏览器打开对应云游戏网页并登录账号，例如云原神。
+1. 云绝区零无网页版需抓包获取，参考 https://bili33.top/posts/MHYY-AutoCheckin-Manual-Gen2/#%E9%85%8D%E7%BD%AE%E8%8E%B7%E5%8F%96；云原神在浏览器打开[对应云游戏网页](https://ys.mihoyo.com/cloud/#/)并登录账号。
 2. 打开开发者工具，切到 `Network` / `网络`。
 3. 刷新页面或进入钱包/时长页面，过滤 `wallet/wallet/get`。
 4. 点开返回成功的请求，在请求头里复制 `X-Rpc-Combo_token` 的值。
@@ -837,9 +837,10 @@ web:
 
 **密码说明：**
 
-- `host` 为 `127.0.0.1` 或 `localhost` 时，不需要密码，直接访问
-- `host` 为 `0.0.0.0` 或其他非本机地址时，必须设置密码才能使用
-- 首次访问会显示密码设置页面，输入后自动保存（存储为哈希值）
+- 实际启动时的监听地址决定认证模式；命令行 `--host` 会覆盖配置文件中的 `web.host`
+- 监听 `127.0.0.1`、`localhost` 或 `::1` 时，密码设置完成后无需登录，直接访问即可
+- 监听 `0.0.0.0` 或其他非本机地址时，必须通过密码认证才能使用
+- 密码为空时，首次访问会显示密码设置页面；密码至少需要 8 位，设置后自动保存（存储为哈希值）
 - 也可以在配置文件中直接填写明文密码，启动时会自动转换为哈希
 - 服务重启后需要重新输入密码
 
@@ -884,6 +885,7 @@ push:
 
 - Bot Token
 - Chat ID
+- 自定义 API URL ，可留空
 
 示例：
 
@@ -894,6 +896,7 @@ push:
       enable: true
       token: "bot token"
       chat_id: "chat id"
+      api_url: ""
 ```
 
 ### 钉钉机器人
@@ -928,6 +931,22 @@ push:
     - provider: feishubot
       enable: true
       webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+```
+
+### 企业微信机器人
+
+需要填写：
+
+- Webhook
+
+示例：
+
+```yaml
+push:
+  channels:
+    - provider: wecombot
+      enable: true
+      webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
 ```
 
 ### 邮箱

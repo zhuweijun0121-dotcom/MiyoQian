@@ -21,6 +21,8 @@ from ..core.captcha import DAMAGOU_BALANCE_INSUFFICIENT_MESSAGE
 import httpx
 
 PUSH_TEMPLATE_DIR = pathlib.Path(__file__).resolve().parents[1] / "templates" / "push"
+WECOM_MARKDOWN_MAX_BYTES = 4096
+WECOM_MARKDOWN_TRUNCATION_NOTICE = "\n\n> 内容过长，已截断"
 
 
 def send_task_push(config: dict[str, Any], lines: list[str]) -> str:
@@ -116,6 +118,8 @@ def _send_exchange(
     topic = str(push.get("topic") or "").strip()
     chat_id = str(push.get("chat_id") or "").strip()
     secret = str(push.get("secret") or "").strip()
+    # 自定义 API 地址
+    api_url = str(push.get("api_url") or "").strip()
     # QQ推送
     push_url = str(push.get("push_url") or "").strip()
     access_token = str(push.get("access_token") or "").strip()
@@ -149,7 +153,8 @@ def _send_exchange(
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
-        url = api_url or f"https://api.telegram.org/bot{token}/sendMessage"
+        request_url = api_url or "https://api.telegram.org"
+        url = f"{request_url}/bot{token}/sendMessage"
         request_json(
             client,
             "POST",
@@ -184,7 +189,7 @@ def _send_exchange(
             raise ValueError(f"QQ推送通道暂不可用，{ex}")
         return
 
-    if provider in {"dingrobot", "dingtalk", "钉钉"}:
+    if provider == "dingrobot":
         require(webhook, "webhook")
         url = signed_ding_url(webhook, secret) if secret else webhook
         request_json(
@@ -198,7 +203,7 @@ def _send_exchange(
         )
         return
 
-    if provider in {"feishubot", "feishu", "飞书"}:
+    if provider == "feishubot":
         require(webhook, "webhook")
         lines = [
             f"**{title}**",
@@ -212,7 +217,23 @@ def _send_exchange(
         request_json(client, "POST", webhook, json={"msg_type": "text", "content": {"text": "\n".join(lines)}})
         return
 
-    if provider in {"email", "smtp", "mail", "邮箱"}:
+    if provider == "wecombot":
+        require(webhook, "webhook")
+        content = truncate_wecom_markdown(
+            build_exchange_markdown(title, goods_name, result, plan, success)
+        )
+        request_json(
+            client,
+            "POST",
+            webhook,
+            json={
+                "msgtype": "markdown",
+                "markdown": {"content": content},
+            },
+        )
+        return
+
+    if provider == "email":
         send_mail(
             smtp_host=smtp_host,
             smtp_port=smtp_port,
@@ -236,6 +257,8 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     topic = str(push.get("topic") or "").strip()
     chat_id = str(push.get("chat_id") or "").strip()
     secret = str(push.get("secret") or "").strip()
+    # 自定义 API 地址
+    api_url = str(push.get("api_url") or "").strip()
     # QQ推送
     push_url = str(push.get("push_url") or "").strip()
     access_token = str(push.get("access_token") or "").strip()
@@ -307,7 +330,8 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
-        url = api_url or f"https://api.telegram.org/bot{token}/sendMessage"
+        request_url = api_url or "https://api.telegram.org"
+        url = f"{request_url}/bot{token}/sendMessage"
         request_json(
             client,
             "POST",
@@ -316,18 +340,24 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
         )
         return
 
-    if provider in {"dingrobot", "dingtalk", "钉钉"}:
+    if provider == "dingrobot":
         require(webhook, "webhook")
         url = signed_ding_url(webhook, secret) if secret else webhook
         request_json(client, "POST", url, json={"msgtype": "markdown", "markdown": {"title": title, "text": markdown_message}})
         return
 
-    if provider in {"feishubot", "feishu", "飞书"}:
+    if provider == "feishubot":
         require(webhook, "webhook")
         request_json(client, "POST", webhook, json=build_feishu_post(title, message, success))
         return
 
-    if provider in {"email", "smtp", "mail", "邮箱"}:
+    if provider == "wecombot":
+        require(webhook, "webhook")
+        content = truncate_wecom_markdown(markdown_message)
+        request_json(client, "POST", webhook, json={"msgtype": "markdown", "markdown": {"content": content}})
+        return
+
+    if provider == "email":
         send_mail(
             smtp_host=smtp_host,
             smtp_port=smtp_port,
@@ -1084,6 +1114,17 @@ def truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(limit - 20, 0)] + "\n... 已截断"
+
+
+def truncate_wecom_markdown(text: str) -> str:
+    """将企业微信 Markdown 内容限制为 4096 个 UTF-8 字节。"""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= WECOM_MARKDOWN_MAX_BYTES:
+        return text
+
+    available = WECOM_MARKDOWN_MAX_BYTES - len(WECOM_MARKDOWN_TRUNCATION_NOTICE.encode("utf-8"))
+    truncated = encoded[:available].decode("utf-8", errors="ignore")
+    return truncated + WECOM_MARKDOWN_TRUNCATION_NOTICE
 
 
 def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> None:

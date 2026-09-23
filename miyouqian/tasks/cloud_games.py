@@ -115,7 +115,14 @@ class CloudGameCheckin:
         send_free_time = send_free_time_minutes(wallet)
         gained = send_free_time
         if gained <= 0 and free_time < 600:
-            gained = self._retry_detect_gained_time(game, token, free_time)
+            gained, latest_wallet = self._retry_detect_gained_time(game, token, free_time)
+            if latest_wallet is not None:
+                wallet = latest_wallet
+        elif gained > 0:
+            # 签到响应的 free_time 是发放前快照，展示时补上本次到账的时长
+            free_time_info = dict(wallet.get("free_time") or {})
+            free_time_info["free_time"] = str(free_time + gained)
+            wallet = {**wallet, "free_time": free_time_info}
 
         if gained > 0:
             self._add(messages, f"{name} 签到成功，获得 {gained} 分钟免费时长")
@@ -132,13 +139,24 @@ class CloudGameCheckin:
             headers=cloud_headers(game, token),
         )
 
-    def _retry_detect_gained_time(self, game: dict[str, Any], token: str, initial_free_time: int) -> int:
+    def _retry_detect_gained_time(
+        self, game: dict[str, Any], token: str, initial_free_time: int
+    ) -> tuple[int, dict[str, Any] | None]:
+        """延时二次查询确认本次签到获得的时长，并带回最新钱包数据。
+
+        返回 (获得分钟数, 最新钱包)；查询异常或失败时返回 (0, None)，
+        由调用方继续使用首次查询的钱包数据。
+        """
         time.sleep(random.randint(3, 6))
-        data = self._request_wallet(game, token)
+        try:
+            data = self._request_wallet(game, token)
+        except Exception:
+            return 0, None
         if data.get("retcode") != 0:
-            return 0
-        next_free_time = free_time_minutes(data.get("data") or {})
-        return max(next_free_time - initial_free_time, 0)
+            return 0, None
+        latest_wallet = data.get("data") or {}
+        next_free_time = free_time_minutes(latest_wallet)
+        return max(next_free_time - initial_free_time, 0), latest_wallet
 
     def _add(self, messages: list[str], message: str) -> None:
         messages.append(message)

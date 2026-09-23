@@ -23,6 +23,7 @@ const pushChannelOptions = [
   ["telegram", "Telegram"],
   ["dingrobot", "钉钉机器人"],
   ["feishubot", "飞书机器人"],
+  ["wecombot", "企业微信机器人"],
   ["email", "邮箱"],
   ["qq", "QQ推送"]
 ];
@@ -312,6 +313,7 @@ function pushChannelFields(provider, channel) {
     webhook: channel.webhook || "",
     topic: channel.topic || "",
     chat_id: channel.chat_id || "",
+    api_url: channel.api_url || "",
     secret: channel.secret || "",
     push_url: channel.push_url || "",
     access_token: channel.access_token || "",
@@ -366,12 +368,14 @@ function pushChannelFields(provider, channel) {
     telegram: [
       field("token", "Bot Token", "password"),
       field("chat_id", "Chat ID"),
+      field("api_url", "自定义 API URL (可选)"),
     ],
     dingrobot: [
       field("webhook", "Webhook", "password"),
       field("secret", "加签 Secret", "password"),
     ],
     feishubot: [field("webhook", "Webhook", "password")],
+    wecombot: [field("webhook", "Webhook", "password")],
     email: [
       field("smtp_host", "SMTP 服务器"),
       field("smtp_port", "SMTP 端口", "number"),
@@ -431,6 +435,7 @@ function hasPushChannelConfig(channel) {
     "webhook",
     "topic",
     "chat_id",
+    "api_url",
     "secret",
     "push_url",
     "access_token",
@@ -449,9 +454,10 @@ function pushChannelFieldNames(provider) {
   const fields = {
     pushplus: ["token", "topic"],
     qq: ["push_url", "access_token", "send_id", "msg_type"],
-    telegram: ["token", "chat_id"],
+    telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],
     feishubot: ["webhook"],
+    wecombot: ["webhook"],
     email: [
       "smtp_host",
       "smtp_port",
@@ -3040,9 +3046,9 @@ function showAuthPage(passwordSet) {
   const shell = document.querySelector(".shell");
   shell.style.display = "none";
 
-  const subtitle = passwordSet ? "请输入访问密码" : "首次使用，请设置访问密码";
+  const subtitle = passwordSet ? "请输入访问密码" : "首次使用，请设置外网访问密码";
   const buttonText = passwordSet ? "登录" : "设置密码";
-  const inputPlaceholder = passwordSet ? "输入密码" : "设置密码（至少 4 位）";
+  const inputPlaceholder = passwordSet ? "输入密码" : "设置密码（至少 8 位）";
 
   const overlay = document.createElement("div");
   overlay.className = "auth-overlay";
@@ -3071,8 +3077,8 @@ function showAuthPage(passwordSet) {
       errorEl.textContent = "请输入密码";
       return;
     }
-    if (!passwordSet && password.length < 4) {
-      errorEl.textContent = "密码至少 4 位";
+    if (!passwordSet && password.length < 8) {
+      errorEl.textContent = "密码至少 8 位";
       return;
     }
     submitBtn.disabled = true;

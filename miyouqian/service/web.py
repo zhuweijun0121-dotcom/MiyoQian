@@ -58,9 +58,11 @@ def is_external_host(host: str) -> bool:
 
 
 class WebApp:
-    def __init__(self, config_path: pathlib.Path) -> None:
+    def __init__(self, config_path: pathlib.Path, host: str = "127.0.0.1", port: int = 5890) -> None:
         self.config_path = config_path
         self.config = load_config(config_path)
+        self.host = host
+        self.port = port
         self._ensure_password_hashed()
         self.log_file = log_path(config_path, self.config)
         configure_logger(self.log_file)
@@ -87,8 +89,11 @@ class WebApp:
 
     @property
     def need_auth(self) -> bool:
-        web = self.config.get("web", {})
-        return is_external_host(str(web.get("host", "127.0.0.1")))
+        # 为了保证不会因为命令行参数、配置文件在无意间被调整导致 Web 控制台泄露到本机之外，要求首次访问 Web 控制台时必须设置一个外网访问密码
+        stored_hash = self.config.get("web", {}).get("password", "")
+        if not stored_hash:
+            return True
+        return is_external_host(str(self.host))
 
     @property
     def password_is_set(self) -> bool:
@@ -111,12 +116,10 @@ class WebApp:
             self._sessions.pop(token, None)
 
     def auth_setup(self, password: str) -> str:
-        if not self.need_auth:
-            raise ValueError("当前为内网模式，无需设置密码")
         if self.password_is_set:
             raise ValueError("密码已设置，不能重复设置")
-        if len(password) < 4:
-            raise ValueError("密码长度至少 4 位")
+        if len(password) < 8:
+            raise ValueError("密码长度至少 8 位")
         with self.lock:
             self.config.setdefault("web", {})["password"] = hash_password(password)
             save_config(self.config_path, self.config)
@@ -315,7 +318,8 @@ class WebApp:
         account = self._account_by_index(int(plan.get("account_index") or 0))
         account_name = display_account_name(account)
         goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
-        self.log(f"开始商品兑换: {goods_name}，账号 {account_name}", "exchange")
+        log_prefix = f"【账号 {account_name}｜商品 {goods_name}】"
+        self.log(f"{log_prefix}开始商品兑换", "exchange")
         if not str(plan.get("device_fp") or "").strip():
             raise ValueError("兑换计划缺少 device_fp，请重新添加计划")
         with self.lock:
@@ -326,13 +330,13 @@ class WebApp:
                     client,
                     config,
                     account,
-                    emit=lambda message: self.log(message, "exchange"),
+                    emit=lambda message: self.log(f"{log_prefix}{message}", "exchange"),
                 ).exchange_with_retry(plan, on_progress=on_progress)
         except Exception as exc:
-            self.log(f"商品兑换请求异常: {goods_name}，账号 {account_name}，{exc}", "exchange")
+            self.log(f"{log_prefix}商品兑换请求异常: {exc}", "exchange")
             raise
         summary = f"{result.get('message', '未知结果')}({result.get('retcode')})，请求 {result.get('attempt', 1)} 次"
-        self.log(f"商品兑换结束: {goods_name}，账号 {account_name}，{summary}", "exchange")
+        self.log(f"{log_prefix}商品兑换结束: {summary}", "exchange")
         return result
 
     def shop_exchange_plan_once(self, plan_index: int) -> dict[str, Any]:
@@ -1148,13 +1152,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(config_path: pathlib.Path, host: str, port: int) -> None:
-    app = WebApp(config_path)
+    app = WebApp(config_path, host, port)
     Handler.app = app
     print_startup_banner("MYQ")
     app.log(f"正在启动 Web 控制台，配置文件: {config_path.resolve()}", "startup")
-    if app.need_auth and not app.password_is_set:
-        app.log("外网模式已启用，首次访问时请设置访问密码", "auth")
+    if not app.password_is_set:
+        app.log("您尚未设置外网访问密码！首次访问 Web 控制台时请您妥善设置并保管外网访问密码！", "auth")
+    if host in ("127.0.0.1", "localhost", "::1"):
+        app.log("您设置了仅监听本机，访问 Web 控制台时将不校验外网访问密码，请您知悉。", "auth")
+    else:
+        app.log("您设置了监听外网，访问 Web 控制台时将校验外网访问密码，请您妥善设置并保管外网访问密码！", "auth")
     server, actual_port = create_server(host, port)
+    app.port = actual_port
     if actual_port != port:
         app.log(f"端口 {port} 被占用，已切换到 {actual_port}", "startup")
     app.start()
