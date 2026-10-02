@@ -213,7 +213,18 @@ def _send_exchange(
             f"结果：{result.get('message', '未知')}",
             f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         ]
-        request_json(client, "POST", webhook, json={"msg_type": "text", "content": {"text": "\n".join(lines)}})
+        payload = {"msg_type": "text", "content": {"text": "\n".join(lines)}}
+        if secret:
+            # 飞书签名：HMAC-SHA256(key="timestamp\nsecret", msg="") 后 base64
+            now = int(time.time())
+            payload["timestamp"] = str(now)
+            payload["sign"] = base64.b64encode(
+                hmac.new(
+                    f"{now}\n{secret}".encode("utf-8"),
+                    digestmod=hashlib.sha256,
+                ).digest()
+            ).decode("utf-8")
+        request_json(client, "POST", webhook, json=payload)
         return
 
     if provider == "wecombot":
@@ -346,7 +357,17 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
 
     if provider == "feishubot":
         require(webhook, "webhook")
-        request_json(client, "POST", webhook, json=build_feishu_post(title, message, success))
+        payload = build_feishu_post(title, message, success)
+        if secret:
+            now = int(time.time())
+            payload["timestamp"] = str(now)
+            payload["sign"] = base64.b64encode(
+                hmac.new(
+                    f"{now}\n{secret}".encode("utf-8"),
+                    digestmod=hashlib.sha256,
+                ).digest()
+            ).decode("utf-8")
+        request_json(client, "POST", webhook, json=payload)
         return
 
     if provider == "wecombot":

@@ -270,7 +270,7 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "qq": ("push_url", "access_token", "send_id", "msg_type"),
     "telegram": ("token", "chat_id", "api_url"),
     "dingrobot": ("webhook", "secret"),
-    "feishubot": ("webhook",),
+    "feishubot": ("webhook", "secret"),
     "wecombot": ("webhook",),
     "email": ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "mail_from", "mail_to", "smtp_ssl"),
 }

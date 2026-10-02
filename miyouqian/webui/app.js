@@ -374,7 +374,7 @@ function pushChannelFields(provider, channel) {
       field("webhook", "Webhook", "password"),
       field("secret", "加签 Secret", "password"),
     ],
-    feishubot: [field("webhook", "Webhook", "password")],
+    feishubot: [field("webhook", "Webhook", "password"),field("secret", "Secret", "password")],
     wecombot: [field("webhook", "Webhook", "password")],
     email: [
       field("smtp_host", "SMTP 服务器"),
@@ -456,7 +456,7 @@ function pushChannelFieldNames(provider) {
     qq: ["push_url", "access_token", "send_id", "msg_type"],
     telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],
-    feishubot: ["webhook"],
+    feishubot: ["webhook", "secret"],
     wecombot: ["webhook"],
     email: [
       "smtp_host",

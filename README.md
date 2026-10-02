@@ -949,6 +949,7 @@ push:
 需要填写：
 
 - Webhook
+- 加签 Secret，可留空
 
 示例：
 
@@ -958,6 +959,7 @@ push:
     - provider: feishubot
       enable: true
       webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+      secret: "SEC..."
 ```
 
 ### 企业微信机器人
