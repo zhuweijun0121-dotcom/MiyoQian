@@ -182,9 +182,20 @@ def normalize_config(config: dict[str, Any]) -> None:
         bbs = {}
         config["bbs"] = bbs
     bbs["checkin"] = parse_bool(bbs.get("checkin", True))
-    bbs.setdefault("read", False)
-    bbs.setdefault("like", False)
-    bbs.setdefault("share", False)
+    raw_forums = bbs.get("forums")
+    if isinstance(raw_forums, list):
+        forums: list[int] = []
+        for item in raw_forums:
+            try:
+                forums.append(int(item))
+            except (TypeError, ValueError):
+                continue
+    else:
+        forums = list(DEFAULT_CONFIG["bbs"]["forums"])
+    bbs["forums"] = forums
+    bbs["read"] = False
+    bbs["like"] = False
+    bbs["share"] = False
     normalize_shop_exchange(config)
 
 

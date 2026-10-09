@@ -29,6 +29,17 @@ const pushChannelOptions = [
 ];
 
 const captchaChannelOptions = [["damagou", "打码狗(成本≈0.01元/次)"]];
+
+const bbsForumOptions = [
+  ["5", "大别野"],
+  ["2", "原神"],
+  ["6", "崩坏：星穹铁道"],
+  ["8", "绝区零"],
+  ["1", "崩坏3"],
+  ["3", "崩坏学园2"],
+  ["4", "未定事件簿"],
+];
+const defaultBbsForums = ["5", "2"];
 const bbsInteractionDisabledReason =
   "米游社改版，社区互动已无法获取米游币，待新获取方式更新~";
 
@@ -118,6 +129,7 @@ function renderConfig() {
   $("captchaMaxRetries").value = config.captcha?.max_retries ?? 3;
   renderGames();
   renderCloudGames();
+  renderBbsForums();
   renderPushChannels();
   renderCaptchaChannels();
   updateTaskDependencyState();
@@ -156,6 +168,23 @@ function renderCloudGames() {
   updateTaskDependencyState();
 }
 
+function renderBbsForums() {
+  const enabled = new Set(
+    (config.bbs?.forums || defaultBbsForums).map((id) => String(id)),
+  );
+  $("bbsForumChips").innerHTML = bbsForumOptions
+    .map(
+      ([key, label]) => `
+        <label class="chip">
+          <input type="checkbox" data-bbs-forum="${key}" data-autosave ${enabled.has(key) ? "checked" : ""} />
+          <span>${label}</span>
+        </label>
+      `,
+    )
+    .join("");
+  updateTaskDependencyState();
+}
+
 function updateTaskDependencyState() {
   const gameEnabled = $("gameCheckin").checked;
   const cloudEnabled = $("cloudGameCheckin").checked;
@@ -172,6 +201,9 @@ function updateTaskDependencyState() {
     "#bbsCheckin",
     !bbsEnabled,
   );
+  const bbsCheckinEnabled = bbsEnabled && $("bbsCheckin").checked;
+  $("bbsForumChips").classList.toggle("is-hidden", !bbsCheckinEnabled);
+  setTaskGroupDisabled("bbsTaskGroup", "[data-bbs-forum]", !bbsCheckinEnabled);
   setBbsInteractionDisabled();
 }
 
@@ -889,6 +921,9 @@ function collectConfig() {
   config.bbs = {
     ...(config.bbs || {}),
     checkin: $("bbsCheckin").checked,
+    forums: Array.from(
+      document.querySelectorAll("[data-bbs-forum]:checked"),
+    ).map((input) => Number(input.dataset.bbsForum)),
     read: false,
     like: false,
     share: false,
@@ -2967,7 +3002,8 @@ function bindEvents() {
       if (
         event.target.id === "gameCheckin" ||
         event.target.id === "cloudGameCheckin" ||
-        event.target.id === "bbsTasks"
+        event.target.id === "bbsTasks" ||
+        event.target.id === "bbsCheckin"
       ) {
         updateTaskDependencyState();
       }
