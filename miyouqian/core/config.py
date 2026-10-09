@@ -193,9 +193,9 @@ def normalize_config(config: dict[str, Any]) -> None:
     else:
         forums = list(DEFAULT_CONFIG["bbs"]["forums"])
     bbs["forums"] = forums
-    bbs["read"] = False
-    bbs["like"] = False
-    bbs["share"] = False
+    bbs.setdefault("read", False)
+    bbs.setdefault("like", False)
+    bbs.setdefault("share", False)
     normalize_shop_exchange(config)
 
 
