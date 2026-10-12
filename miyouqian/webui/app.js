@@ -344,6 +344,7 @@ function pushChannelFields(provider, channel) {
   const common = {
     token: channel.token || "",
     webhook: channel.webhook || "",
+    plain_text: channel.plain_text ?? false,
     topic: channel.topic || "",
     chat_id: channel.chat_id || "",
     api_url: channel.api_url || "",
@@ -408,7 +409,10 @@ function pushChannelFields(provider, channel) {
       field("secret", "加签 Secret", "password"),
     ],
     feishubot: [field("webhook", "Webhook", "password"),field("secret", "Secret", "password")],
-    wecombot: [field("webhook", "Webhook", "password")],
+    wecombot: [
+      field("webhook", "Webhook", "password"),
+      checkbox("plain_text", "纯文本消息（兼容微信）"),
+    ],
     email: [
       field("smtp_host", "SMTP 服务器"),
       field("smtp_port", "SMTP 端口", "number"),
@@ -490,7 +494,7 @@ function pushChannelFieldNames(provider) {
     telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],
     feishubot: ["webhook", "secret"],
-    wecombot: ["webhook"],
+    wecombot: ["webhook", "plain_text"],
     email: [
       "smtp_host",
       "smtp_port",
@@ -515,6 +519,8 @@ function cleanPushChannel(channel) {
       cleaned[key] = Number(channel[key] || 465);
     } else if (key === "smtp_ssl") {
       cleaned[key] = channel[key] === undefined ? true : Boolean(channel[key]);
+    } else if (key === "plain_text") {
+      cleaned[key] = Boolean(channel[key]);
     } else {
       cleaned[key] = String(channel[key] || "").trim();
     }
@@ -974,8 +980,8 @@ function collectPushChannel(row) {
   const channel = emptyPushChannel(provider);
   channel.enable = Boolean(toggle ?.checked);
   row.querySelectorAll("[data-push-field]").forEach((field) => {
-    if (field.dataset.pushField === "smtp_ssl") {
-    channel.smtp_ssl = field.type === "checkbox" ? field.checked: field.value === "true";
+    if (["smtp_ssl", "plain_text"].includes(field.dataset.pushField)) {
+    channel[field.dataset.pushField] = field.type === "checkbox" ? field.checked: field.value === "true";
   } else if (field.type === "checkbox") {
     channel[field.dataset.pushField] = field.checked;
   } else if (field.tagName === "SELECT") {

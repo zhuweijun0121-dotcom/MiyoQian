@@ -282,7 +282,7 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "telegram": ("token", "chat_id", "api_url"),
     "dingrobot": ("webhook", "secret"),
     "feishubot": ("webhook", "secret"),
-    "wecombot": ("webhook",),
+    "wecombot": ("webhook", "plain_text"),
     "email": ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "mail_from", "mail_to", "smtp_ssl"),
 }
 
@@ -310,6 +310,8 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
                 channel[field] = int(raw.get(field) or 465)
             elif field == "smtp_ssl":
                 channel[field] = parse_bool(raw.get(field, True))
+            elif field == "plain_text":
+                channel[field] = parse_bool(raw.get(field, False))
             else:
                 channel[field] = str(raw.get(field) or "")
         if should_keep_push_channel(channel):
@@ -323,6 +325,10 @@ def should_keep_push_channel(channel: dict[str, Any]) -> bool:
     provider = str(channel.get("provider") or "")
     for field in PUSH_CHANNEL_FIELDS.get(provider, ()):
         if field == "smtp_ssl":
+            continue
+        if field == "plain_text":
+            if channel.get(field):
+                return True
             continue
         if field == "smtp_port":
             if int(channel.get(field) or 465) != 465:

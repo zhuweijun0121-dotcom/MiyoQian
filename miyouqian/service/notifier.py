@@ -23,6 +23,8 @@ import httpx
 PUSH_TEMPLATE_DIR = pathlib.Path(__file__).resolve().parents[1] / "templates" / "push"
 WECOM_MARKDOWN_MAX_BYTES = 4096
 WECOM_MARKDOWN_TRUNCATION_NOTICE = "\n\n> 内容过长，已截断"
+WECOM_TEXT_MAX_BYTES = 2048
+WECOM_TEXT_TRUNCATION_NOTICE = "\n\n内容过长，已截断"
 
 
 def send_task_push(config: dict[str, Any], lines: list[str]) -> str:
@@ -229,16 +231,19 @@ def _send_exchange(
 
     if provider == "wecombot":
         require(webhook, "webhook")
-        content = truncate_wecom_markdown(
-            build_exchange_markdown(title, goods_name, result, plan, success)
-        )
+        if push.get("plain_text", False):
+            msgtype = "text"
+            content = truncate_wecom_text(build_exchange_text(title, goods_name, result, plan, success))
+        else:
+            msgtype = "markdown"
+            content = truncate_wecom_markdown(build_exchange_markdown(title, goods_name, result, plan, success))
         request_json(
             client,
             "POST",
             webhook,
             json={
-                "msgtype": "markdown",
-                "markdown": {"content": content},
+                "msgtype": msgtype,
+                msgtype: {"content": content},
             },
         )
         return
@@ -372,8 +377,13 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
 
     if provider == "wecombot":
         require(webhook, "webhook")
-        content = truncate_wecom_markdown(markdown_message)
-        request_json(client, "POST", webhook, json={"msgtype": "markdown", "markdown": {"content": content}})
+        if push.get("plain_text", False):
+            msgtype = "text"
+            content = truncate_wecom_text(plain_message)
+        else:
+            msgtype = "markdown"
+            content = truncate_wecom_markdown(markdown_message)
+        request_json(client, "POST", webhook, json={"msgtype": msgtype, msgtype: {"content": content}})
         return
 
     if provider == "email":
@@ -1144,6 +1154,17 @@ def truncate_wecom_markdown(text: str) -> str:
     available = WECOM_MARKDOWN_MAX_BYTES - len(WECOM_MARKDOWN_TRUNCATION_NOTICE.encode("utf-8"))
     truncated = encoded[:available].decode("utf-8", errors="ignore")
     return truncated + WECOM_MARKDOWN_TRUNCATION_NOTICE
+
+
+def truncate_wecom_text(text: str) -> str:
+    """将企业微信普通文本限制为 2048 个 UTF-8 字节。"""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= WECOM_TEXT_MAX_BYTES:
+        return text
+
+    available = WECOM_TEXT_MAX_BYTES - len(WECOM_TEXT_TRUNCATION_NOTICE.encode("utf-8"))
+    truncated = encoded[:available].decode("utf-8", errors="ignore")
+    return truncated + WECOM_TEXT_TRUNCATION_NOTICE
 
 
 def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> None:

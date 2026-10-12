@@ -969,6 +969,8 @@ push:
 
 - Webhook
 
+可选开启页面中的「纯文本消息（兼容微信）」，对应 `plain_text: true`。开启后，签到及兑换通知使用普通文本，适用于微信端提示「暂不支持此消息类型」的情况；关闭或不配置时保持原有 Markdown 格式。普通文本最多 2048 个 UTF-8 字节，Markdown 最多 4096 个 UTF-8 字节，超长内容会截断并提示。
+
 示例：
 
 ```yaml
@@ -977,6 +979,7 @@ push:
     - provider: wecombot
       enable: true
       webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+      plain_text: false  # 默认 Markdown；改为 true 使用普通文本
 ```
 
 ### 邮箱

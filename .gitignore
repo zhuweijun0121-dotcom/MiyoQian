@@ -11,3 +11,5 @@ logs/
 tests/*
 !tests/test_exchange_scheduler.py
 !tests/test_cloud_games.py
+!tests/test_wecom_push.py
+!tests/test_webui_push_channels.js
