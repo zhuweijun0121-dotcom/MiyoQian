@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import httpx
 
 from miyouqian.core.config import normalize_push_channels
 from miyouqian.service import notifier
@@ -29,6 +31,13 @@ class ServerChanUrlTest(unittest.TestCase):
     def test_surrounding_whitespace_is_trimmed(self):
         url = notifier.serverchan_url({"sendkey": "  sctp5tK  ", "uid": " 5 "})
         self.assertEqual(url, "https://5.push.ft07.com/send/sctp5tK.send")
+
+    def test_non_numeric_uid_cannot_redirect_the_request(self):
+        # uid 会被拼进主机名，必须是纯数字，否则请求可能被发往其他域名
+        for uid in ("evil.com/#", "1.evil.com", "1@evil.com", "１２３", "-1"):
+            with self.subTest(uid=uid):
+                with self.assertRaises(ValueError):
+                    notifier.serverchan_url({"sendkey": "sctp1tA", "uid": uid})
 
 
 class ServerChanSendTest(unittest.TestCase):
@@ -59,6 +68,37 @@ class ServerChanSendTest(unittest.TestCase):
         client, response = self._client(None)
         response.json.side_effect = ValueError("not json")
         notifier.serverchan_send(client, {"sendkey": "sctp1tA"}, "标题", "正文")
+
+    def test_http_error_does_not_leak_sendkey(self):
+        # httpx 的 HTTPStatusError 文本带完整 URL，而 URL 里就是 SendKey
+        sendkey = "sctp1tSECRETKEY"
+        request = httpx.Request("POST", f"https://1.push.ft07.com/send/{sendkey}.send")
+        client = Mock()
+        client.post.return_value = httpx.Response(403, request=request)
+        with self.assertRaises(Exception) as ctx:
+            notifier.serverchan_send(client, {"sendkey": sendkey}, "标题", "正文")
+        self.assertNotIn(sendkey, str(ctx.exception))
+        self.assertIn("403", str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
+
+
+class ServerChanRoutingTest(unittest.TestCase):
+    def setUp(self):
+        self.send = self.enterContext(patch.object(notifier, "serverchan_send"))
+        self.client = Mock()
+        self.channel = {"sendkey": "sctp1tA"}
+
+    def test_task_push_uses_serverchan(self):
+        notifier._send(self.client, "serverchan", self.channel, "标题", "日志", True)
+        self.send.assert_called_once_with(
+            self.client, self.channel, "标题", notifier.build_push_markdown("标题", "日志", True),
+        )
+
+    def test_exchange_push_uses_serverchan(self):
+        with patch.object(notifier, "build_exchange_markdown", return_value="**兑换**"):
+            notifier._send_exchange(self.client, "serverchan", self.channel, "标题", "商品", {}, {}, True)
+        self.send.assert_called_once_with(self.client, self.channel, "标题", "**兑换**")
 
 
 class PushChannelConfigTest(unittest.TestCase):

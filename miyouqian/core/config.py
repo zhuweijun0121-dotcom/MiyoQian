@@ -95,6 +95,7 @@ def load_config(path: str | pathlib.Path) -> dict[str, Any]:
     normalize_config(config)
     merge_credentials(config, load_credentials(config_path, config))
     normalize_config(config)
+    bind_shop_plan_accounts(config)
     return config
 
 
@@ -232,6 +233,7 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
             "enable": parse_bool(raw.get("enable", True)),
             "auto": parse_bool(raw.get("auto", True)),
             "account_index": account_index,
+            "account_stuid": str(raw.get("account_stuid") or "").strip(),
             "goods_id": str(raw.get("goods_id") or "").strip(),
             "goods_name": str(raw.get("goods_name") or raw.get("name") or "").strip(),
             "icon": str(raw.get("icon") or ""),
@@ -399,6 +401,44 @@ def validate_unique_account_uids(config: dict[str, Any]) -> None:
         if uid in seen:
             raise ValueError(f"UID {uid} 已存在于账号 {seen[uid]}，不能重复添加同一账号")
         seen[uid] = index
+
+
+def find_account_index_by_stuid(accounts: list[dict[str, Any]], stuid: str) -> int | None:
+    stuid = str(stuid or "").strip()
+    if not stuid:
+        return None
+    for index, account in enumerate(accounts):
+        if str(account.get("stuid") or "").strip() == stuid:
+            return index
+    return None
+
+
+def bind_shop_plan_accounts(config: dict[str, Any]) -> None:
+    """让兑换计划跟着账号走，而不是跟着账号在列表里的下标走。
+
+    计划里的 account_index 只是账号列表下标，删除或重排账号后会悄悄指向另一个账号，
+    而 uid/region 仍是原账号的角色。这里按 account_stuid 重新算下标；
+    还没有 account_stuid 的旧计划按当前下标补上；找不到对应账号的计划直接停用。
+    stuid 存在凭证文件里，所以必须在凭证合并之后调用，否则会把所有计划都当成账号已删除。
+    """
+    accounts = config.get("accounts") or []
+    # 没有任何账号带 stuid（凭证文件缺失或都未登录）时没有可比对的标识，保持原样
+    if not any(str(account.get("stuid") or "").strip() for account in accounts):
+        return
+    plans = (config.get("shop_exchange") or {}).get("plans") or []
+    for plan in plans:
+        stuid = str(plan.get("account_stuid") or "").strip()
+        if not stuid:
+            index = plan.get("account_index", 0)
+            if isinstance(index, int) and 0 <= index < len(accounts):
+                plan["account_stuid"] = str(accounts[index].get("stuid") or "").strip()
+            continue
+        index = find_account_index_by_stuid(accounts, stuid)
+        if index is not None:
+            plan["account_index"] = index
+        elif plan.get("enable", True):
+            plan["enable"] = False
+            plan["last_result"] = "所属账号已删除或更换，计划已停用"
 
 
 def find_account(config: dict[str, Any], name: str | None = None) -> dict[str, Any]:

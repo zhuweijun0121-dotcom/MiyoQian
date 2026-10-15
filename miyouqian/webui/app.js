@@ -853,6 +853,7 @@ function renderAccounts() {
       renderAccounts();
       if (!removed?._draft) {
         autoSaveConfig()
+          .then(refreshShopPlans)
           .then(() => showToast("账号已删除"))
           .catch((error) => showToast(error.message));
       }
@@ -1278,6 +1279,13 @@ function renderShopPlans() {
   bindShopPlanEvents();
 }
 
+// 计划绑定的是账号的 stuid，下标只是当前列表里的位置；找不到绑定账号时返回 -1
+function shopPlanAccountIndex(plan, accounts) {
+  const stuid = String(plan.account_stuid || "");
+  if (!stuid) return Number(plan.account_index || 0);
+  return accounts.findIndex((account) => String(account.stuid || "") === stuid);
+}
+
 function shopPlanRow(plan, index) {
   const accounts = config.accounts || [];
   const paused = plan.enable === false;
@@ -1285,15 +1293,22 @@ function shopPlanRow(plan, index) {
   const open = shopOpenPlans.has(String(index)) ? "open" : "";
   const roleDisplay = shopRoleDisplay(plan);
   const serverDisplay = shopServerDisplay(plan);
-  const accountOptions = accounts.length
-    ? accounts
-        .map((account, accountIndex) => {
-          const selected =
-            Number(plan.account_index || 0) === accountIndex ? "selected" : "";
-          return `<option value="${accountIndex}" ${selected}>${escapeHtml(accountLabel(account))}</option>`;
-        })
-        .join("")
-    : `<option value="0">暂无账号</option>`;
+  const selectedAccount = shopPlanAccountIndex(plan, accounts);
+  // 计划绑定的账号已不在列表里时单独占一项，不能让下拉框悄悄落到第一个账号上
+  const missingOption =
+    selectedAccount < 0
+      ? `<option value="" data-stuid="${escapeAttr(plan.account_stuid || "")}" selected>账号已删除，请重新选择</option>`
+      : "";
+  const accountOptions =
+    accounts.length || missingOption
+      ? missingOption +
+        accounts
+          .map((account, accountIndex) => {
+            const selected = accountIndex === selectedAccount ? "selected" : "";
+            return `<option value="${accountIndex}" data-stuid="${escapeAttr(account.stuid || "")}" ${selected}>${escapeHtml(accountLabel(account))}</option>`;
+          })
+          .join("")
+      : `<option value="0">暂无账号</option>`;
   return `
     <details class="shop-plan ${paused ? "is-paused" : ""}" data-shop-plan="${index}" ${open}>
       <summary class="shop-plan-summary">
@@ -1456,13 +1471,18 @@ function collectShopExchange() {
     row.querySelectorAll("[data-shop-plan-field]").forEach((field) => {
       const key = field.dataset.shopPlanField;
       if (key === "enable") plan[key] = field.checked;
-      else if (key === "account_index" || key === "price")
+      else if (key === "account_index") {
         plan[key] = Number(field.value || 0);
+        // 身份取自选项本身：下拉框渲染后账号列表可能已经变动，只看下标会指向别的账号
+        plan.account_stuid = field.selectedOptions?.[0]?.dataset.stuid || "";
+      } else if (key === "price") plan[key] = Number(field.value || 0);
       else if (key === "exchange_at")
         plan[key] = localInputToTimestamp(field.value);
       else if (key === "auto") plan[key] = field.value !== "false";
       else plan[key] = field.value.trim();
     });
+    const accountIndex = shopPlanAccountIndex(plan, config?.accounts || []);
+    if (accountIndex >= 0) plan.account_index = accountIndex;
     if (plan.goods_id) shop.plans.push(plan);
   });
   return shop;
@@ -1593,6 +1613,7 @@ async function buildShopPlan(good, accountIndex) {
     enable: true,
     auto: true,
     account_index: accountIndex,
+    account_stuid: String((config.accounts || [])[accountIndex]?.stuid || ""),
     goods_id: base.goods_id,
     goods_name: base.goods_name,
     icon: base.icon,
@@ -2055,6 +2076,13 @@ async function saveConfig(message = "配置已保存") {
   } finally {
     isSavingConfig = false;
   }
+}
+
+// 账号变动后服务端会重新绑定兑换计划（下标重算、账号已删除的计划停用），这里把结果同步回界面
+async function refreshShopPlans() {
+  const latest = await api("/api/config");
+  config.shop_exchange = latest.shop_exchange;
+  renderShopConfig();
 }
 
 async function autoSaveConfig() {

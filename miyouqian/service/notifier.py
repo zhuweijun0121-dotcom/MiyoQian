@@ -423,7 +423,8 @@ def pushplus_payload(token: str, title: str, content: str, template: str, topic:
     return payload
 
 
-SERVERCHAN_SENDKEY_RE = re.compile(r"^sctp(\d+)t")
+SERVERCHAN_SENDKEY_RE = re.compile(r"^sctp([0-9]+)t")
+SERVERCHAN_UID_RE = re.compile(r"[0-9]+")
 
 
 def serverchan_url(push: dict[str, Any]) -> str:
@@ -441,6 +442,9 @@ def serverchan_url(push: dict[str, Any]) -> str:
         if not match:
             raise ValueError("SendKey 形如 sctp1234tXXXX，未能解析出 uid，请在配置里手动填写 uid")
         uid = match.group(1)
+    # uid 会拼进主机名，只接受 ASCII 数字，避免被填成其他域名后把推送内容发出去
+    if not SERVERCHAN_UID_RE.fullmatch(uid):
+        raise ValueError("uid 只能是数字，请检查 Server酱 配置")
     return f"https://{uid}.push.ft07.com/send/{sendkey}.send"
 
 
@@ -452,10 +456,15 @@ def serverchan_send(client: httpx.Client, push: dict[str, Any], title: str, mark
     """
     url = serverchan_url(push)
     response = client.post(url, json={"title": title, "desp": markdown})
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # HTTPStatusError 的文本带完整 URL，而 URL 里就是 SendKey，会被推送结果/日志/页面提示原样显示
+        raise ValueError(f"Server酱请求失败：HTTP {exc.response.status_code}") from None
     try:
         data = response.json()
     except ValueError:
+        # 200 但不是 JSON（比如网关返回的 HTML）也按成功处理，和其他渠道只看状态码的行为保持一致
         return
     if not isinstance(data, dict):
         return

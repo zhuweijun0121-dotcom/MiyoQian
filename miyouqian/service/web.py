@@ -22,7 +22,15 @@ import qrcode
 
 from ..auth.login import AigisRequired, CaptchaLogin, QRLogin, _QrRefreshed
 from ..core import cookies
-from ..core.config import load_config, log_path, normalize_config, save_config, validate_unique_account_uids
+from ..core.config import (
+    bind_shop_plan_accounts,
+    find_account_index_by_stuid,
+    load_config,
+    log_path,
+    normalize_config,
+    save_config,
+    validate_unique_account_uids,
+)
 from ..core.http import ApiClient
 from ..core.logs import append_log, configure_logger, format_line, print_startup_banner
 from ..tasks.shop_exchange import ShopExchange
@@ -218,6 +226,7 @@ class WebApp:
             old_config = copy.deepcopy(self.config)
             preserve_push_channel_secrets(old_config, payload)
             normalize_config(payload)
+            bind_shop_plan_accounts(payload)
             changes = diff_config(old_config, payload)
             self.config = payload
             save_config(self.config_path, self.config)
@@ -315,7 +324,7 @@ class WebApp:
             return result
 
     def shop_exchange_once(self, plan: dict[str, Any], on_progress: Callable[[int, str], None] | None = None) -> dict[str, Any]:
-        account = self._account_by_index(int(plan.get("account_index") or 0))
+        account = self._account_by_index(self._plan_account_index(plan))
         account_name = display_account_name(account)
         goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
         log_prefix = f"【账号 {account_name}｜商品 {goods_name}】"
@@ -451,21 +460,30 @@ class WebApp:
             else:
                 title = "❌ 商品兑换失败"
 
-            # 从 account_index 获取账号信息，添加到 plan 中
+            # 获取计划所属账号信息，添加到 plan 中
             plan_with_account = dict(plan)
-            account_index = plan.get("account_index")
-            if account_index is not None:
-                try:
-                    account = self._account_by_index(int(account_index))
-                    plan_with_account["account"] = display_account_name(account)
-                except Exception:
-                    plan_with_account["account"] = "未知账号"
+            try:
+                account = self._account_by_index(self._plan_account_index(plan))
+                plan_with_account["account"] = display_account_name(account)
+            except Exception:
+                plan_with_account["account"] = "未知账号"
 
             push_result = send_exchange_push(config, title, goods_name, result, plan_with_account, success=is_success)
             if push_result:
                 self.log(f"商品兑换推送已发送: {push_result}", "exchange")
         except Exception as exc:
             self.log(f"商品兑换推送发送失败: {exc}", "exchange")
+
+    def _plan_account_index(self, plan: dict[str, Any]) -> int:
+        """兑换计划所属账号在当前列表里的下标：优先按 stuid 找，避免账号列表变动后指向别的账号。"""
+        stuid = str(plan.get("account_stuid") or "").strip()
+        if not stuid:
+            return int(plan.get("account_index") or 0)
+        with self.lock:
+            index = find_account_index_by_stuid(self.config.get("accounts") or [], stuid)
+        if index is None:
+            raise ValueError("兑换计划所属账号已不存在，请重新选择执行账号")
+        return index
 
     def _account_by_index(self, account_index: int) -> dict[str, Any]:
         with self.lock:
@@ -622,10 +640,13 @@ class WebApp:
                 account["name"] = account_data["stuid"]
             if not draft:
                 self.config["accounts"][account_index] = account
+                # 这个位置换成了另一个米游社账号时，绑定旧账号的兑换计划要停用，不能改用新账号的 cookie
+                bind_shop_plan_accounts(self.config)
                 save_config(self.config_path, self.config)
                 self.log_file = log_path(self.config_path, self.config)
                 configure_logger(self.log_file)
                 self.scheduler.reload(self.config)
+                self.exchange_scheduler.reload(self.config)
         return account
 
     def _login_worker(
