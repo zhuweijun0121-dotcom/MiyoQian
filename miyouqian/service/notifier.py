@@ -151,6 +151,10 @@ def _send_exchange(
             request_json(client, "POST", url, json=payload)
         return
 
+    if provider == "serverchan":
+        serverchan_send(client, push, title, build_exchange_markdown(title, goods_name, result, plan, success))
+        return
+
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
@@ -341,6 +345,10 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
             request_json(client, "POST", url, json=pushplus_payload(token, title, markdown_message, "markdown", topic))
         return
 
+    if provider == "serverchan":
+        serverchan_send(client, push, title, markdown_message)
+        return
+
     if provider == "telegram":
         require(token, "token")
         require(chat_id, "chat_id")
@@ -413,6 +421,47 @@ def pushplus_payload(token: str, title: str, content: str, template: str, topic:
     if topic:
         payload["topic"] = topic
     return payload
+
+
+SERVERCHAN_SENDKEY_RE = re.compile(r"^sctp(\d+)t")
+
+
+def serverchan_url(push: dict[str, Any]) -> str:
+    """拼 Server酱³ 的推送地址：``https://<uid>.push.ft07.com/send/<sendkey>.send``。
+
+    `uid` 可以留空——官方文档写明它就在 SendKey 的 ``sctp{uid}t...`` 前缀里，
+    这里自动解析，省得用户还要去 SendKey 页面抄一遍。
+    """
+    sendkey = str(push.get("sendkey") or "").strip()
+    if not sendkey:
+        raise ValueError("请先填写 Server酱 SendKey")
+    uid = str(push.get("uid") or "").strip()
+    if not uid:
+        match = SERVERCHAN_SENDKEY_RE.match(sendkey)
+        if not match:
+            raise ValueError("SendKey 形如 sctp1234tXXXX，未能解析出 uid，请在配置里手动填写 uid")
+        uid = match.group(1)
+    return f"https://{uid}.push.ft07.com/send/{sendkey}.send"
+
+
+def serverchan_send(client: httpx.Client, push: dict[str, Any], title: str, markdown: str) -> None:
+    """POST 到 Server酱³。用 JSON 提交，中文与换行不用手工 urlencode。
+
+    这里不走公共的 `request_json`：那个 helper 只负责 raise_for_status 且不返回响应体，
+    而 Server酱的业务错误是放在 200 响应的 `code` 字段里的，必须自己看一眼。
+    """
+    url = serverchan_url(push)
+    response = client.post(url, json={"title": title, "desp": markdown})
+    response.raise_for_status()
+    try:
+        data = response.json()
+    except ValueError:
+        return
+    if not isinstance(data, dict):
+        return
+    code = data.get("code")
+    if code is not None and str(code) != "0":
+        raise ValueError(f"Server酱返回错误：{data.get('message') or code}")
 
 
 def build_telegram_html(title: str, message: str, success: bool) -> str:

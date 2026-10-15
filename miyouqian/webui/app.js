@@ -20,6 +20,7 @@ const cloudGameOptions = [
 
 const pushChannelOptions = [
   ["pushplus", "pushplus"],
+  ["serverchan", "Server酱³"],
   ["telegram", "Telegram"],
   ["dingrobot", "钉钉机器人"],
   ["feishubot", "飞书机器人"],
@@ -343,6 +344,8 @@ function bindPushChannelEvents() {
 function pushChannelFields(provider, channel) {
   const common = {
     token: channel.token || "",
+    sendkey: channel.sendkey || "",
+    uid: channel.uid || "",
     webhook: channel.webhook || "",
     plain_text: channel.plain_text ?? false,
     topic: channel.topic || "",
@@ -392,6 +395,10 @@ function pushChannelFields(provider, channel) {
     pushplus: [
       field("token", "Token", "password"),
       field("topic", "群组编码")
+    ],
+    serverchan: [
+      field("sendkey", "SendKey", "password"),
+      field("uid", "UID（可留空，自动从 SendKey 解析）"),
     ],
     qq: [
       field("push_url", "HTTP API", "text"),
@@ -490,6 +497,7 @@ function hasPushChannelConfig(channel) {
 function pushChannelFieldNames(provider) {
   const fields = {
     pushplus: ["token", "topic"],
+    serverchan: ["sendkey", "uid"],
     qq: ["push_url", "access_token", "send_id", "msg_type"],
     telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],

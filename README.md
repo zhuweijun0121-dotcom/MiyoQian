@@ -907,6 +907,30 @@ push:
       topic: ""
 ```
 
+### Server酱³
+
+注意：**Server酱³ 与 Server酱Turbo 是两套用户体系，SendKey 不通用**。本项目接的是 Server酱³（[sc3.ft07.com](https://sc3.ft07.com/)）。
+
+需要填写：
+
+- **SendKey**：在 [SendKey 页面](https://sc3.ft07.com/sendkey) 获取，形如 `sctp1234tXXXXXXXXXXXXXXXX`
+- **UID**：**可以留空**。官方文档写明 uid 就在 SendKey 的 `sctp{uid}t` 前缀里，本项目会自动解析；只有解析不出来时才需要手填
+
+示例：
+
+```yaml
+push:
+  channels:
+    - provider: serverchan
+      enable: true
+      sendkey: "sctp1234tXXXXXXXXXXXXXXXX"
+      uid: ""
+```
+
+推送地址为 `https://<uid>.push.ft07.com/send/<sendkey>.send`，用 `POST` + JSON 提交（`{"title": ..., "desp": ...}`，正文为 markdown，APP 内可渲染）。这样中文和换行都不需要手工 `urlencode`，也不会撞上 URL 长度限制。
+
+如果 HTTP 返回 200 但 `code` 不为 `0`（例如 SendKey 失效），控制台的「推送测试」会直接把这个错误信息显示出来。
+
 ### Telegram
 
 需要填写：

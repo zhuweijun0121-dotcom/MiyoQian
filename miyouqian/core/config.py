@@ -278,6 +278,8 @@ def normalize_cloud_game_enabled(value: Any) -> list[str]:
 
 PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "pushplus": ("token", "topic"),
+    # Server酱³（sc3.ft07.com）：SendKey 形如 sctp1234tXXXX，uid 可留空（会从 SendKey 前缀解析）
+    "serverchan": ("sendkey", "uid"),
     "qq": ("push_url", "access_token", "send_id", "msg_type"),
     "telegram": ("token", "chat_id", "api_url"),
     "dingrobot": ("webhook", "secret"),
@@ -287,7 +289,7 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
-    allowed = {"pushplus", "telegram", "dingrobot", "feishubot", "wecombot", "email", "qq"}
+    allowed = {"pushplus", "serverchan", "telegram", "dingrobot", "feishubot", "wecombot", "email", "qq"}
     raw_channels = push.get("channels")
     if not isinstance(raw_channels, list):
         raw_channels = []
