@@ -42,6 +42,11 @@ captcha:
       enable: false
       userkey: ""   # 打码狗 userkey
       timeout: 60
+    - provider: custom   # 自定义接口，请求/响应需遵循 miyouqian/webui/custom-captcha-api.md
+      enable: false
+      url: ""        # 完整的接口地址，如 https://gt.example.com/nine，按填写内容原样请求
+      api_key: ""    # 选填，填写后通过请求头 X-API-Key 发送
+      timeout: 120
 
 schedule:
   enable: false

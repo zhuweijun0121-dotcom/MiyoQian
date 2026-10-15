@@ -29,7 +29,12 @@ const pushChannelOptions = [
   ["qq", "QQ推送"]
 ];
 
-const captchaChannelOptions = [["damagou", "打码狗(成本≈0.01元/次)"]];
+const captchaChannelOptions = [
+  ["damagou", "打码狗(成本≈0.01元/次)"],
+  ["custom", "自定义接口"],
+];
+const customCaptchaDocUrl = "/custom-captcha-api.md";
+let customCaptchaDocText = "";
 
 const bbsForumOptions = [
   ["5", "大别野"],
@@ -582,6 +587,7 @@ function renderCaptchaChannels() {
             </div>
           </div>
           ${editing ? captchaChannelFields(provider, channel || emptyCaptchaChannel(provider)) : captchaChannelHiddenFields(channel)}
+          ${provider === "custom" && enabled ? customCaptchaTips() : ""}
         </div>
       `;
     })
@@ -592,6 +598,12 @@ function renderCaptchaChannels() {
 function bindCaptchaChannelEvents() {
   document.querySelectorAll("[data-captcha-toggle]").forEach((input) => {
     input.addEventListener("change", () => {
+      if (input.checked) {
+        // 同一时间只会使用一个打码渠道，选中当前渠道时取消其他渠道
+        document.querySelectorAll("[data-captcha-toggle]").forEach((other) => {
+          if (other !== input) other.checked = false;
+        });
+      }
       collectConfig();
       const provider = input.dataset.captchaToggle;
       const existingChannel = findCaptchaChannel(provider);
@@ -642,9 +654,121 @@ function bindCaptchaChannelEvents() {
       }
     });
   });
+  document.querySelectorAll("[data-captcha-doc-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      showCustomCaptchaDoc().catch((error) => showToast(error.message));
+    });
+  });
+  document.querySelectorAll("[data-captcha-doc-copy]").forEach((button) => {
+    button.addEventListener("click", () => {
+      copyCustomCaptchaDoc().catch((error) => showToast(error.message));
+    });
+  });
+}
+
+function customCaptchaTips() {
+  return `
+    <div class="captcha-tips">
+      <span>自定义接口需遵循固定的请求与响应规范：GET 请求接口地址并附带 gt / challenge 参数，可选请求头 X-API-Key，统一 code / data 响应格式。</span>
+      <div class="captcha-tips-actions">
+        <button class="ghost" type="button" data-captcha-doc-view>查看规范</button>
+        <button class="ghost" type="button" data-captcha-doc-copy>复制规范</button>
+      </div>
+    </div>
+  `;
+}
+
+async function loadCustomCaptchaDoc() {
+  if (customCaptchaDocText) return customCaptchaDocText;
+  const response = await fetch(customCaptchaDocUrl, { cache: "no-cache" });
+  if (!response.ok) throw new Error("规范文档加载失败");
+  customCaptchaDocText = await response.text();
+  return customCaptchaDocText;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  // 通过局域网 http 访问时 Clipboard API 不可用，回退到 execCommand
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+  document.body.appendChild(area);
+  area.select();
+  const copied = document.execCommand("copy");
+  area.remove();
+  if (!copied) throw new Error("复制失败，请在规范弹窗中手动选中复制");
+}
+
+async function copyCustomCaptchaDoc() {
+  await copyText(await loadCustomCaptchaDoc());
+  showToast("规范文档已复制");
+}
+
+async function showCustomCaptchaDoc() {
+  const text = await loadCustomCaptchaDoc();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card captcha-doc-dialog" role="dialog" aria-modal="true" aria-labelledby="captchaDocTitle">
+      <div class="modal-head">
+        <div>
+          <strong id="captchaDocTitle">自定义打码接口规范</strong>
+          <p>对接的打码服务需按此规范提供请求与响应</p>
+        </div>
+        <button class="ghost icon-only" type="button" data-captcha-doc-close title="关闭">
+          <svg><use href="#i-x"></use></svg>
+        </button>
+      </div>
+      <pre class="captcha-doc-text"></pre>
+      <div class="modal-actions">
+        <button class="ghost" type="button" data-captcha-doc-dialog-copy>复制全文</button>
+        <button class="primary" type="button" data-captcha-doc-close>关闭</button>
+      </div>
+    </div>
+  `;
+  overlay.querySelector(".captcha-doc-text").textContent = text;
+  document.body.insertBefore(overlay, document.querySelector(".toast"));
+  const onKeydown = (event) => {
+    if (event.key === "Escape") close();
+  };
+  const close = () => {
+    document.removeEventListener("keydown", onKeydown);
+    overlay.remove();
+  };
+  document.addEventListener("keydown", onKeydown);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  overlay
+    .querySelectorAll("[data-captcha-doc-close]")
+    .forEach((button) => button.addEventListener("click", close));
+  overlay
+    .querySelector("[data-captcha-doc-dialog-copy]")
+    .addEventListener("click", () => {
+      copyCustomCaptchaDoc().catch((error) => showToast(error.message));
+    });
 }
 
 function captchaChannelFields(provider, channel) {
+  if (provider === "custom") {
+    return `
+      <div class="push-channel-fields form-grid compact">
+        <label>
+          <span>接口地址</span>
+          <input data-captcha-field="url" type="text" placeholder="https://gt.example.com/nine" value="${escapeAttr(channel.url || "")}" autocomplete="off" />
+        </label>
+        <label>
+          <span>API Key（选填）</span>
+          <input data-captcha-field="api_key" type="password" value="${escapeAttr(channel.api_key || "")}" autocomplete="off" />
+        </label>
+        <input data-captcha-field="timeout" type="hidden" value="${escapeAttr(channel.timeout || 120)}" />
+      </div>
+    `;
+  }
   if (provider !== "damagou") return "";
   return `
     <div class="push-channel-fields form-grid compact">
@@ -670,6 +794,15 @@ function captchaChannelHiddenFields(channel) {
 }
 
 function emptyCaptchaChannel(provider) {
+  if (provider === "custom") {
+    return {
+      provider,
+      enable: true,
+      url: "",
+      api_key: "",
+      timeout: 120,
+    };
+  }
   return {
     provider,
     enable: true,
@@ -704,7 +837,11 @@ function findCaptchaChannel(provider) {
 }
 
 function hasCaptchaChannelConfig(channel) {
-  return Boolean(channel && String(channel.userkey || "").trim());
+  if (!channel) return false;
+  if (channel.provider === "custom") {
+    return Boolean(String(channel.url || "").trim());
+  }
+  return Boolean(String(channel.userkey || "").trim());
 }
 
 function renderAccounts() {
@@ -1011,7 +1148,7 @@ function collectCaptchaChannel(row) {
   channel.enable = Boolean(toggle?.checked);
   row.querySelectorAll("[data-captcha-field]").forEach((field) => {
     if (field.dataset.captchaField === "timeout") {
-      channel.timeout = Number(field.value || 60);
+      channel.timeout = Number(field.value || channel.timeout);
     } else {
       channel[field.dataset.captchaField] = field.value.trim();
     }

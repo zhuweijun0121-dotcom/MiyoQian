@@ -42,7 +42,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "captcha": {
         "enable": False,
         "max_retries": 3,
-        "channels": [{"provider": "damagou", "enable": False, "userkey": "", "type": "", "timeout": 60}],
+        "channels": [
+            {"provider": "damagou", "enable": False, "userkey": "", "type": "", "timeout": 60},
+            {"provider": "custom", "enable": False, "url": "", "api_key": "", "timeout": 120},
+        ],
     },
     "schedule": {"enable": False, "time": "09:00", "jitter_minutes": 45, "run_on_start": False},
     "games": {
@@ -343,8 +346,14 @@ def should_keep_push_channel(channel: dict[str, Any]) -> bool:
     return False
 
 
+def default_captcha_channel(provider: str) -> dict[str, Any]:
+    if provider == "custom":
+        return {"provider": "custom", "enable": False, "url": "", "api_key": "", "timeout": 120}
+    return {"provider": "damagou", "enable": False, "userkey": "", "type": "", "timeout": 60}
+
+
 def normalize_captcha_channels(captcha: dict[str, Any]) -> list[dict[str, Any]]:
-    allowed = {"damagou"}
+    allowed = ("damagou", "custom")
     raw_channels = captcha.get("channels")
     if not isinstance(raw_channels, list):
         raw_channels = []
@@ -360,22 +369,27 @@ def normalize_captcha_channels(captcha: dict[str, Any]) -> list[dict[str, Any]]:
         if provider not in allowed or provider in seen:
             continue
         seen.add(provider)
+        default_timeout = default_captcha_channel(provider)["timeout"]
         try:
-            timeout = max(float(raw.get("timeout") or 60), 1)
+            timeout = max(float(raw.get("timeout") or default_timeout), 1)
             normalized_timeout: int | float = int(timeout) if timeout.is_integer() else timeout
         except (TypeError, ValueError):
-            normalized_timeout = 60
-        channels.append(
-            {
-                "provider": provider,
-                "enable": parse_bool(raw.get("enable", captcha.get("enable", False))),
-                "userkey": str(raw.get("userkey") or ""),
-                "type": str(raw.get("type") or ""),
-                "timeout": normalized_timeout,
-            }
-        )
-    if not any(channel["provider"] == "damagou" for channel in channels):
-        channels.append({"provider": "damagou", "enable": False, "userkey": "", "type": "", "timeout": 60})
+            normalized_timeout = default_timeout
+        channel: dict[str, Any] = {
+            "provider": provider,
+            "enable": parse_bool(raw.get("enable", captcha.get("enable", False))),
+        }
+        if provider == "custom":
+            channel["url"] = str(raw.get("url") or "").strip()
+            channel["api_key"] = str(raw.get("api_key") or "").strip()
+        else:
+            channel["userkey"] = str(raw.get("userkey") or "")
+            channel["type"] = str(raw.get("type") or "")
+        channel["timeout"] = normalized_timeout
+        channels.append(channel)
+    for provider in allowed:
+        if provider not in seen:
+            channels.append(default_captcha_channel(provider))
     return channels
 
 

@@ -30,6 +30,10 @@ class ApiClient:
     def get_json_with_headers(self, url: str, **kwargs: Any) -> tuple[dict[str, Any], httpx.Headers]:
         return self._request_json_with_headers("GET", url, **kwargs)
 
+    def get_json_any_status(self, url: str, **kwargs: Any) -> tuple[dict[str, Any], httpx.Headers]:
+        """GET 并解析 JSON，HTTP 4xx/5xx 不抛错，供错误信息写在响应体里的接口使用。"""
+        return self._request_json_with_headers("GET", url, check_status=False, **kwargs)
+
     def post_json_with_headers(self, url: str, **kwargs: Any) -> tuple[dict[str, Any], httpx.Headers]:
         return self._request_json_with_headers("POST", url, **kwargs)
 
@@ -38,11 +42,12 @@ class ApiClient:
         return data
 
     def _request_json_with_headers(
-        self, method: str, url: str, **kwargs: Any
+        self, method: str, url: str, check_status: bool = True, **kwargs: Any
     ) -> tuple[dict[str, Any], httpx.Headers]:
         try:
             response = self._client.request(method, url, **kwargs)
-            response.raise_for_status()
+            if check_status:
+                response.raise_for_status()
             data = response.json()
         except httpx.HTTPError as exc:
             raise ApiError(f"网络请求失败: {url} ({exc})") from exc

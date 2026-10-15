@@ -916,6 +916,7 @@ def is_sensitive_config_path(path: str) -> bool:
         "tokens",
         "webhook",
         "userkey",
+        "api_key",
         "secret",
         "password",
         "smtp_password",
