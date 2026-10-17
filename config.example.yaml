@@ -96,6 +96,16 @@ push:
       enable: false
       token: ""
       topic: ""
+    # QQ 开放平台官方机器人，和 provider: qq（OneBot）无关
+    # user_openid / group_openid 可以手填，也可以在 Web 控制台点「绑定」按钮自动获取并保存
+    - provider: qqbot
+      enable: false
+      app_id: ""
+      client_secret: ""
+      user_openid: ""
+      group_openid: ""
+      message_format: text   # text 或 markdown
+      api_base: ""           # 留空使用 https://api.bot.qq.com，沙箱填 https://sandbox.api.sgroup.qq.com
 
 shop_exchange:
   enable: true

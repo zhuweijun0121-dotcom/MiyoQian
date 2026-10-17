@@ -286,6 +286,9 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     # Server酱³（sc3.ft07.com）：SendKey 形如 sctp1234tXXXX，uid 可留空（会从 SendKey 前缀解析）
     "serverchan": ("sendkey", "uid"),
     "qq": ("push_url", "access_token", "send_id", "msg_type"),
+    # QQ 开放平台官方机器人：与上面的 onebot 版 qq 通道无关，
+    # user_openid / group_openid 只能通过 Web 控制台的「绑定」按钮获取
+    "qqbot": ("app_id", "client_secret", "user_openid", "group_openid", "message_format", "api_base"),
     "telegram": ("token", "chat_id", "api_url"),
     "dingrobot": ("webhook", "secret"),
     "feishubot": ("webhook", "secret"),
@@ -293,8 +296,23 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "email": ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "mail_from", "mail_to", "smtp_ssl"),
 }
 
+PUSH_CHANNEL_DEFAULTS: dict[str, dict[str, Any]] = {
+    "qqbot": {"message_format": "text"},
+}
+
+
 def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
-    allowed = {"pushplus", "serverchan", "telegram", "dingrobot", "feishubot", "wecombot", "email", "qq"}
+    allowed = {
+        "pushplus",
+        "serverchan",
+        "telegram",
+        "dingrobot",
+        "feishubot",
+        "wecombot",
+        "email",
+        "qq",
+        "qqbot",
+    }
     raw_channels = push.get("channels")
     if not isinstance(raw_channels, list):
         raw_channels = []
@@ -312,6 +330,7 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
             "provider": provider,
             "enable": parse_bool(raw.get("enable", push.get("enable", False))),
         }
+        defaults = PUSH_CHANNEL_DEFAULTS.get(provider, {})
         for field in PUSH_CHANNEL_FIELDS[provider]:
             if field == "smtp_port":
                 channel[field] = int(raw.get(field) or 465)
@@ -319,8 +338,10 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
                 channel[field] = parse_bool(raw.get(field, True))
             elif field == "plain_text":
                 channel[field] = parse_bool(raw.get(field, False))
+            elif field == "message_format":
+                channel[field] = "markdown" if str(raw.get(field) or "").strip().lower() == "markdown" else "text"
             else:
-                channel[field] = str(raw.get(field) or "")
+                channel[field] = str(raw.get(field) or defaults.get(field, ""))
         if should_keep_push_channel(channel):
             channels.append(channel)
     return channels
@@ -339,6 +360,11 @@ def should_keep_push_channel(channel: dict[str, Any]) -> bool:
             continue
         if field == "smtp_port":
             if int(channel.get(field) or 465) != 465:
+                return True
+            continue
+        # 只有非默认取值才算「已配置」，避免默认的 message_format=text 让空通道一直被保留
+        if field in PUSH_CHANNEL_DEFAULTS.get(provider, {}):
+            if str(channel.get(field) or "") != str(PUSH_CHANNEL_DEFAULTS[provider][field]):
                 return True
             continue
         if str(channel.get(field) or "").strip():

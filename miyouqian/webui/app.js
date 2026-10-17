@@ -26,8 +26,14 @@ const pushChannelOptions = [
   ["feishubot", "飞书机器人"],
   ["wecombot", "企业微信机器人"],
   ["email", "邮箱"],
-  ["qq", "QQ推送"]
+  ["qq", "QQ推送"],
+  ["qqbot", "QQ机器人（QQ开放平台）"],
 ];
+
+// 供测试断言渠道清单；应用自身不读这个导出
+if (typeof globalThis !== "undefined") {
+  globalThis.__myqPushChannelOptions = pushChannelOptions;
+}
 
 const captchaChannelOptions = [
   ["damagou", "打码狗(成本≈0.01元/次)"],
@@ -62,6 +68,10 @@ let loginErrorCollapseTimer = null;
 let editingAccountIndex = null;
 let expandedCloudAccounts = new Set();
 let editingPushProviders = new Set();
+let qqBindState = null;
+let qqBindTimer = null;
+let qqBindTarget = "";
+let qqBindRestored = false;
 let editingCaptchaProviders = new Set();
 let logsPinnedToBottom = true;
 let activeView = "dashboard";
@@ -283,15 +293,61 @@ function renderPushChannels() {
               }
             </div>
           </div>
+          ${
+            provider === "qqbot" && (editing || qqBindTarget)
+              ? qqBotBindPanel()
+              : ""
+          }
           ${editing ? pushChannelFields(provider, channel || emptyPushChannel(provider)) : pushChannelHiddenFields(channel)}
         </div>
       `;
     })
     .join("");
   bindPushChannelEvents();
+  lockQqBotFieldsWhileBinding();
+  loadQqBindState();
+}
+
+// 绑定期间会往配置里回写 OpenID 并重新拉配置，这期间不允许改字段，避免改动被覆盖
+function lockQqBotFieldsWhileBinding() {
+  const row = document.querySelector('[data-push-provider="qqbot"]');
+  if (!row) return;
+  const lock = Boolean(qqBindState?.running);
+  row.querySelectorAll("[data-push-field]").forEach((field) => {
+    field.disabled = lock;
+  });
+}
+
+// 刷新页面时把服务端记住的绑定进度接回来，避免重复点绑定。
+// 只在每次启动 / 发起绑定时查一次：这个函数会被 renderPushChannels 调用，
+// 而它自己又会触发重画，不加这个标记就会无限递归。
+async function loadQqBindState() {
+  if (qqBindRestored) return;
+  qqBindRestored = true;
+  try {
+    const state = await api("/api/qqbot/bind/status");
+    if (!state.running) return;
+    qqBindState = state;
+    qqBindTarget = state.target || "";
+    editingPushProviders.add("qqbot");
+    renderPushChannels();
+    scheduleQqBindPoll();
+  } catch (error) {
+    // 拿不到状态不影响其他功能，用户重新点一次绑定即可
+  }
 }
 
 function bindPushChannelEvents() {
+  document.querySelectorAll("[data-qqbind]").forEach((button) => {
+    button.addEventListener("click", () => {
+      startQqBind(button.dataset.qqbind).catch((error) => showToast(error.message));
+    });
+  });
+  document.querySelectorAll("[data-qqbind-cancel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      cancelQqBind().catch((error) => showToast(error.message));
+    });
+  });
   document.querySelectorAll("[data-push-toggle]").forEach((input) => {
     input.addEventListener("change", () => {
       collectConfig();
@@ -361,6 +417,12 @@ function pushChannelFields(provider, channel) {
     access_token: channel.access_token || "",
     send_id: channel.send_id || "",
     msg_type: channel.msg_type || "",
+    app_id: channel.app_id || "",
+    client_secret: channel.client_secret || "",
+    user_openid: channel.user_openid || "",
+    group_openid: channel.group_openid || "",
+    message_format: channel.message_format || "text",
+    api_base: channel.api_base || "",
     smtp_host: channel.smtp_host || "",
     smtp_port: channel.smtp_port || 465,
     smtp_user: channel.smtp_user || "",
@@ -396,6 +458,17 @@ function pushChannelFields(provider, channel) {
       <span>${label}</span>
     </label>
   `;
+  // OpenID 可以手填，也可以用下面的绑定按钮自动获取；手填时提示去哪儿找
+  const openidField = (name, placeholder) => `
+    <input data-push-field="${name}" type="text" value="${escapeAttr(common[name] || "")}" placeholder="${escapeAttr(placeholder)}" autocomplete="off" />
+  `;
+  // 和 field 不同，这里把 label、输入框、操作按钮竖着排，按钮才放得下
+  const below = (label, ...content) => `
+    <div class="push-field-stack">
+      <span class="push-field-label">${escapeHtml(label)}</span>
+      ${content.join("")}
+    </div>
+  `;
   const fields = {
     pushplus: [
       field("token", "Token", "password"),
@@ -410,6 +483,22 @@ function pushChannelFields(provider, channel) {
       field("access_token", "Access Token", "text"),
       field("send_id", "Group ID / User ID", "text"),
       selectBox("msg_type", "推送方式", { group: "QQ群", private: "私信" })
+    ],
+    qqbot: [
+      field("app_id", "AppID"),
+      field("client_secret", "AppSecret", "password"),
+      selectBox("message_format", "消息格式", { text: "纯文本", markdown: "Markdown" }),
+      field("api_base", "接口地址（可留空）"),
+      below(
+        "私聊 OpenID",
+        openidField("user_openid", "可手填；或点按钮后用 QQ 私聊机器人发送验证码自动获取"),
+        qqBindButton("user", "绑定私聊"),
+      ),
+      below(
+        "群 OpenID",
+        openidField("group_openid", "可手填；或点按钮后把机器人拉进群、在群里 @机器人"),
+        qqBindButton("group", "绑定群聊"),
+      ),
     ],
     telegram: [
       field("token", "Bot Token", "password"),
@@ -436,7 +525,139 @@ function pushChannelFields(provider, channel) {
     ],
   };
 
-  return `<div class="push-channel-fields form-grid two compact">${(fields[provider] || []).join("")}</div>`;
+  const fieldsHtml = (fields[provider] || []).join("");
+  return `<div class="push-channel-fields form-grid two compact">${fieldsHtml}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// QQ 开放平台机器人：user_openid / group_openid 只能通过机器人收到消息时获取，
+// 所以这里让用户先拿到验证码，再去私聊机器人或在群里 @机器人 发出来。
+// ---------------------------------------------------------------------------
+function qqBindButton(target, label) {
+  const busy = Boolean(qqBindState?.running);
+  return `
+    <div class="push-field-row">
+      <button class="ghost" type="button" data-qqbind="${target}" ${busy ? "disabled" : ""}>
+        <svg><use href="#i-play"></use></svg>
+        <span>${escapeHtml(label)}</span>
+      </button>
+    </div>
+  `;
+}
+
+function qqBotBindPanel() {
+  const state = qqBindState;
+  if (!state || state.status === "idle") return "";
+  const targetLabel = qqBindTarget === "group" ? "群聊" : "私聊";
+  const classes = ["qq-bind-panel"];
+  if (state.status === "error") classes.push("is-error");
+  if (state.status === "success") classes.push("is-success");
+
+  let body;
+  if (state.status === "success") {
+    body = `<span>${escapeHtml(state.message || "绑定成功")}</span>`;
+    if (state.openid) {
+      body += `<span>OpenID：<code>${escapeHtml(state.openid)}</code></span>`;
+    }
+  } else if (state.running) {
+    const hint =
+      qqBindTarget === "group"
+        ? "把机器人拉进群，或在群里 @机器人 发送："
+        : "用 QQ 私聊机器人，发送：";
+    body = `<span>${escapeHtml(state.message || `正在等待${targetLabel}消息`)}<br />${hint}<code class="qq-bind-code">${escapeHtml(state.verify_code || "······")}</code></span>
+      <div class="qq-bind-actions">
+        <button class="ghost" type="button" data-qqbind-cancel="1">取消绑定</button>
+      </div>`;
+  } else {
+    body = `<span>${escapeHtml(state.message || "绑定未完成")}</span>`;
+  }
+  return `<div class="${classes.join(" ")}">${body}</div>`;
+}
+
+async function startQqBind(target) {
+  if (qqBindState?.running) {
+    showToast("已有绑定正在进行，请稍候");
+    return;
+  }
+  collectConfig();
+  const channel = cleanPushChannel(
+    findPushChannel("qqbot") || emptyPushChannel("qqbot"),
+  );
+  if (!channel.app_id || !channel.client_secret) {
+    throw new Error("请先填写 AppID 和 AppSecret 再绑定");
+  }
+  qqBindTarget = target;
+  qqBindState = { running: true, status: "starting", message: "正在连接 QQ 网关", verify_code: "" };
+  editingPushProviders.add("qqbot");
+  renderPushChannels();
+  try {
+    const state = await api("/api/qqbot/bind", {
+      method: "POST",
+      body: JSON.stringify({
+        target,
+        app_id: channel.app_id,
+        client_secret: channel.client_secret,
+        api_base: channel.api_base || "",
+      }),
+    });
+    qqBindState = state;
+    renderPushChannels();
+    scheduleQqBindPoll();
+  } catch (error) {
+    qqBindState = { running: false, status: "error", message: error.message };
+    qqBindTarget = "";
+    renderPushChannels();
+    showToast(error.message);
+  }
+}
+
+async function cancelQqBind() {
+  await api("/api/qqbot/bind/cancel", { method: "POST", body: "{}" });
+  showToast("正在取消绑定");
+}
+
+function scheduleQqBindPoll() {
+  clearTimeout(qqBindTimer);
+  qqBindTimer = setTimeout(pollQqBind, 1200);
+}
+
+async function pollQqBind() {
+  try {
+    const state = await api("/api/qqbot/bind/status");
+    qqBindState = state;
+    if (state.running) {
+      renderPushChannels();
+      scheduleQqBindPoll();
+      return;
+    }
+    finishQqBind(state);
+  } catch (error) {
+    qqBindState = { running: false, status: "error", message: error.message };
+    finishQqBind(qqBindState);
+  }
+}
+
+function finishQqBind(state) {
+  clearTimeout(qqBindTimer);
+  qqBindTimer = null;
+  const target = state.target || qqBindTarget;
+  qqBindTarget = "";
+  if (state.status === "success") {
+    // 服务端在绑定成功时已经把 OpenID 写进 config.yaml 了，这里重新拉一次配置，
+    // 让页面显示的 AppID/AppSecret/OpenID 和磁盘上的保持一致
+    loadConfig()
+      .then(() => {
+        renderPushChannels();
+        showToast(`已绑定并保存${target === "group" ? "群聊" : "私聊"} OpenID`);
+      })
+      .catch((error) => {
+        renderPushChannels();
+        showToast(`已绑定，但刷新配置失败：${error.message}`);
+      });
+    return;
+  }
+  renderPushChannels();
+  showToast(state.message || "绑定未完成");
 }
 
 function pushChannelHiddenFields(channel) {
@@ -490,6 +711,10 @@ function hasPushChannelConfig(channel) {
     "access_token",
     "send_id",
     "msg_type",
+    "app_id",
+    "client_secret",
+    "user_openid",
+    "group_openid",
     "smtp_host",
     "smtp_user",
     "smtp_password",
@@ -504,6 +729,7 @@ function pushChannelFieldNames(provider) {
     pushplus: ["token", "topic"],
     serverchan: ["sendkey", "uid"],
     qq: ["push_url", "access_token", "send_id", "msg_type"],
+    qqbot: ["app_id", "client_secret", "user_openid", "group_openid", "message_format", "api_base"],
     telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],
     feishubot: ["webhook", "secret"],
@@ -534,6 +760,8 @@ function cleanPushChannel(channel) {
       cleaned[key] = channel[key] === undefined ? true : Boolean(channel[key]);
     } else if (key === "plain_text") {
       cleaned[key] = Boolean(channel[key]);
+    } else if (key === "message_format") {
+      cleaned[key] = channel[key] === "markdown" ? "markdown" : "text";
     } else {
       cleaned[key] = String(channel[key] || "").trim();
     }
@@ -546,6 +774,8 @@ function shouldSavePushChannel(channel) {
   return pushChannelFieldNames(channel.provider).some((key) => {
     if (key === "smtp_ssl") return false;
     if (key === "smtp_port") return Number(channel[key] || 465) !== 465;
+    // message_format 默认是 text，只有用户主动改成 markdown 才算配置过
+    if (key === "message_format") return String(channel[key] || "") === "markdown";
     return String(channel[key] || "").trim();
   });
 }

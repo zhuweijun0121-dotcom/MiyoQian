@@ -594,6 +594,81 @@ textarea:focus {
   margin-top: 0;
 }
 
+/* QQ 机器人的 OpenID 要配绑定按钮，单独竖排并占满一行 */
+.push-channel-fields > .push-field-stack,
+.push-channel-fields > .qq-bind-panel {
+  grid-column: 1 / -1;
+}
+
+.push-field-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.push-field-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.push-field-label + .push-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.push-field-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.qq-bind-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.qq-bind-panel.is-error {
+  border-color: #e3b4bc;
+  background: #fdf5f6;
+  color: #b83b4b;
+}
+
+.qq-bind-panel.is-success {
+  border-color: #b6ddc9;
+  background: #f2faf6;
+  color: #1c7c61;
+}
+
+.qq-bind-panel > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qq-bind-code {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #eaf3fb;
+  color: #168df5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.qq-bind-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .captcha-tips {
   display: flex;
   flex-wrap: wrap;
