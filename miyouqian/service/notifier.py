@@ -23,6 +23,8 @@ from ..core.captcha import DAMAGOU_BALANCE_INSUFFICIENT_MESSAGE
 import httpx
 
 PUSH_TEMPLATE_DIR = pathlib.Path(__file__).resolve().parents[1] / "templates" / "push"
+# 卡片外层（account_sections_html 的容器）已经是白底，这里不用再重复 background，省字符
+_CARD_STYLE = "border:1px solid #d8e4ef;border-radius:8px;padding:14px"
 WECOM_MARKDOWN_MAX_BYTES = 4096
 WECOM_TEXT_MAX_BYTES = 2048
 WECOM_SEND_INTERVAL = 3.1  # 每个机器人最多 20 条/分钟，留出边界余量。
@@ -32,10 +34,13 @@ _WECOM_NEXT_SEND: dict[str, float] = {}
 
 
 def send_task_push(config: dict[str, Any], lines: list[str]) -> str:
-    """发送签到结果推送，并对打码狗余额不足使用醒目的专用标题。"""
+    """发送签到结果推送，标题要如实反映成败，不能不管有没有失败都说「任务完成」。"""
     balance_insufficient = has_damagou_balance_insufficient(lines)
-    title = "打码狗余额不足" if balance_insufficient else "米游签任务完成"
     success = False if balance_insufficient else is_task_success(lines)
+    if balance_insufficient:
+        title = "打码狗余额不足"
+    else:
+        title = "米游签任务完成" if success else "米游签任务失败"
     return send_push(config, title, "\n".join(lines), success=success)
 
 
@@ -147,12 +152,12 @@ def _send_exchange(
             token, title, build_exchange_html(title, goods_name, result, plan, success), "html", topic
         )
         try:
-            request_json(client, "POST", url, json=payload)
+            request_pushplus(client, url, payload)
         except Exception:
             payload = pushplus_payload(
                 token, title, build_exchange_markdown(title, goods_name, result, plan, success), "markdown", topic
             )
-            request_json(client, "POST", url, json=payload)
+            request_pushplus(client, url, payload)
         return
 
     if provider == "serverchan":
@@ -338,9 +343,9 @@ def _send(client: httpx.Client, provider: str, push: dict[str, Any], title: str,
         url = "https://www.pushplus.plus/send"
         payload = pushplus_payload(token, title, build_push_html(title, message, success), "html", topic)
         try:
-            request_json(client, "POST", url, json=payload)
+            request_pushplus(client, url, payload)
         except Exception:
-            request_json(client, "POST", url, json=pushplus_payload(token, title, markdown_message, "markdown", topic))
+            request_pushplus(client, url, pushplus_payload(token, title, markdown_message, "markdown", topic))
         return
 
     if provider == "serverchan":
@@ -585,14 +590,11 @@ def build_account_sections_html(summary: dict[str, Any]) -> str:
         open_attr = " open" if index == 0 else ""
         parts.append(
             f"""
-            <details{open_attr} style="border:1px solid #d8e4ef;border-radius:8px;background:#ffffff;margin-bottom:12px;overflow:hidden;">
-              <summary style="cursor:pointer;list-style:none;padding:13px 14px;background:#f1f7fc;color:#102033;font-size:15px;font-weight:800;">
-                {html.escape(section["label"])}
-                <span style="float:right;color:#627389;font-size:12px;font-weight:600;">点击切换</span>
-              </summary>
-              <div style="padding:12px;">
-                <div style="margin-bottom:10px;">{build_game_section_html(section)}</div>
-                <div style="margin-bottom:10px;">{build_cloud_game_section_html(section)}</div>
+            <details{open_attr} style="border:1px solid #d8e4ef;border-radius:8px;background:#fff;margin-bottom:10px;overflow:hidden;">
+              <summary style="cursor:pointer;list-style:none;padding:12px 14px;background:#f1f7fc;color:#102033;font-size:15px;font-weight:800;">{html.escape(section["label"])}</summary>
+              <div style="padding:10px;">
+                <div style="margin-bottom:8px;">{build_game_section_html(section)}</div>
+                <div style="margin-bottom:8px;">{build_cloud_game_section_html(section)}</div>
                 {build_bbs_section_html(section)}
               </div>
             </details>
@@ -630,10 +632,10 @@ def build_game_section_html(summary: dict[str, Any]) -> str:
         return section_empty_html("游戏社区签到", "本次未执行游戏社区签到")
     item_rows = build_result_items_html(game)
     return f"""
-    <div style="border:1px solid #d8e4ef;border-radius:8px;padding:14px;background:#ffffff;">
-      <div style="font-size:16px;font-weight:800;color:#102033;margin-bottom:8px;">游戏社区签到</div>
-      {progress_html(game["percent"], game["label"], "#168df5")}
-      <div style="margin-top:8px;color:#627389;font-size:13px;line-height:1.5;">{html.escape(game["summary"] or "无汇总信息")}</div>
+    <div style="{_CARD_STYLE}">
+      <div style="font-size:15px;font-weight:800;color:#102033;margin-bottom:6px;">游戏社区签到</div>
+      {segmented_progress_html(game["done_percent"], game["failed_percent"], game["label"], game["color"])}
+      <div style="margin-top:6px;color:#627389;font-size:13px;">{html.escape(game["summary"] or "无汇总信息")}</div>
       {item_rows}
     </div>
     """.strip()
@@ -645,10 +647,10 @@ def build_cloud_game_section_html(summary: dict[str, Any]) -> str:
         return section_empty_html("云游戏签到", "本次未执行云游戏签到")
     item_rows = build_result_items_html(cloud)
     return f"""
-    <div style="border:1px solid #d8e4ef;border-radius:8px;padding:14px;background:#ffffff;">
-      <div style="font-size:16px;font-weight:800;color:#102033;margin-bottom:8px;">云游戏签到</div>
-      {progress_html(cloud["percent"], cloud["label"], "#168df5")}
-      <div style="margin-top:8px;color:#627389;font-size:13px;line-height:1.5;">{html.escape(cloud["summary"] or "无汇总信息")}</div>
+    <div style="{_CARD_STYLE}">
+      <div style="font-size:15px;font-weight:800;color:#102033;margin-bottom:6px;">云游戏签到</div>
+      {segmented_progress_html(cloud["done_percent"], cloud["failed_percent"], cloud["label"], cloud["color"])}
+      <div style="margin-top:6px;color:#627389;font-size:13px;">{html.escape(cloud["summary"] or "无汇总信息")}</div>
       {item_rows}
     </div>
     """.strip()
@@ -657,21 +659,19 @@ def build_cloud_game_section_html(summary: dict[str, Any]) -> str:
 def build_result_items_html(result: dict[str, Any]) -> str:
     rows: list[str] = []
     for item in result["failed_items"][:6]:
-        rows.append(result_item_html("失败", item, "#b83b4b", "#fdecef"))
+        rows.append(result_item_html("失败", item, "#b83b4b"))
     for item in result["items"][:6]:
-        rows.append(result_item_html("成功", item, "#1c7c61", "#edf8f3"))
+        rows.append(result_item_html("成功", item, "#1c7c61"))
     if not rows:
         return ""
-    return '<div style="margin-top:10px;border-top:1px solid #edf3f8;">' + "".join(rows) + "</div>"
+    return '<div style="margin-top:8px;border-top:1px solid #edf3f8;">' + "".join(rows) + "</div>"
 
 
-def result_item_html(label: str, item: str, color: str, bg: str) -> str:
-    return f"""
-    <div style="padding:8px 0;border-bottom:1px solid #edf3f8;font-size:13px;line-height:1.5;">
-      <span style="display:inline-block;min-width:34px;text-align:center;border-radius:999px;background:{html.escape(bg)};color:{html.escape(color)};font-weight:700;margin-right:8px;">{html.escape(label)}</span>
-      <span style="color:#102033;">{html.escape(shorten_text(item, 120))}</span>
-    </div>
-    """.strip()
+def result_item_html(label: str, item: str, color: str) -> str:
+    return (
+        f'<div style="padding:6px 0;border-bottom:1px solid #edf3f8;font-size:13px;">'
+        f'<b style="color:{color};">{html.escape(label)}</b> {html.escape(shorten_text(item, 120))}</div>'
+    )
 
 
 def build_bbs_section_html(summary: dict[str, Any]) -> str:
@@ -680,24 +680,22 @@ def build_bbs_section_html(summary: dict[str, Any]) -> str:
         return section_empty_html("米游币获取", "本次未执行米游币任务")
     task_rows = "".join(
         f"""
-        <div style="padding:10px 0;border-top:1px solid #edf3f8;">
-          <div style="font-size:13px;margin-bottom:6px;">
-            <span style="font-weight:700;color:#102033;">{html.escape(task["name"])}</span>
+        <div style="padding:8px 0;border-top:1px solid #edf3f8;">
+          <div style="font-size:13px;margin-bottom:4px;">
+            <b style="color:#102033;">{html.escape(task["name"])}</b>
             <span style="float:right;color:{html.escape(task["color"])};">{html.escape(task["label"])} · {task["done"]}/{task["total"]}</span>
           </div>
-          {progress_html(task["percent"], "", task["color"], compact=True)}
+          {segmented_progress_html(task["done_percent"], task["failed_percent"], "", compact=True)}
         </div>
         """.strip()
         for task in bbs["tasks"]
     )
     return f"""
-    <div style="border:1px solid #d8e4ef;border-radius:8px;padding:14px;background:#ffffff;">
-      <div style="font-size:16px;font-weight:800;color:#102033;margin-bottom:8px;">米游币获取</div>
-      <div style="font-size:13px;color:#627389;margin-bottom:10px;line-height:1.6;">
-        今日 <strong style="color:#102033;font-size:18px;">{bbs["today_done_points"]}/{bbs["possible_points"]}</strong>
-        <span style="margin-left:8px;">实际 {bbs["actual_points"]}</span>
-        <span style="margin-left:8px;">新增 {bbs["gained_points"]}</span>
-        <span style="margin-left:8px;">总计 {bbs["total_points"] or "-"}</span>
+    <div style="{_CARD_STYLE}">
+      <div style="font-size:15px;font-weight:800;color:#102033;margin-bottom:6px;">米游币获取</div>
+      <div style="font-size:13px;color:#627389;margin-bottom:8px;">
+        今日 <b style="color:#102033;font-size:17px;">{bbs["today_done_points"]}/{bbs["possible_points"]}</b>
+        实际 {bbs["actual_points"]} · 新增 {bbs["gained_points"]} · 总计 {bbs["total_points"] or "-"}
       </div>
       {progress_html(bbs["point_percent"], f'今日进度 {bbs["point_percent"]}%', "#168df5")}
       {task_rows}
@@ -707,8 +705,8 @@ def build_bbs_section_html(summary: dict[str, Any]) -> str:
 
 def section_empty_html(title: str, message: str) -> str:
     return f"""
-    <div style="border:1px solid #d8e4ef;border-radius:8px;padding:16px;background:#ffffff;">
-      <div style="font-size:16px;font-weight:800;color:#102033;margin-bottom:8px;">{html.escape(title)}</div>
+    <div style="{_CARD_STYLE}">
+      <div style="font-size:15px;font-weight:800;color:#102033;margin-bottom:6px;">{html.escape(title)}</div>
       <div style="color:#627389;font-size:13px;">{html.escape(message)}</div>
     </div>
     """.strip()
@@ -717,15 +715,44 @@ def section_empty_html(title: str, message: str) -> str:
 def progress_html(percent: int, label: str, color: str, compact: bool = False) -> str:
     percent = clamp_percent(percent)
     height = 6 if compact else 8
-    label_html = f'<div style="margin-top:5px;color:#627389;font-size:12px;">{html.escape(label)}</div>' if label else ""
-    return f"""
-    <div>
-      <div style="height:{height}px;border-radius:999px;background:#d8e4ef;overflow:hidden;">
-        <div style="width:{percent}%;height:{height}px;background:{html.escape(color)};"></div>
-      </div>
-      {label_html}
-    </div>
-    """.strip()
+    label_html = f'<div style="color:#627389;font-size:12px;">{html.escape(label)}</div>' if label else ""
+    return (
+        f'<div style="height:{height}px;border-radius:999px;background:'
+        f"linear-gradient(to right,{color} 0 {percent}%,#d8e4ef {percent}% 100%);\">"
+        f"</div>{label_html}"
+    )
+
+
+def segmented_progress_html(
+    done_percent: int,
+    failed_percent: int,
+    label: str,
+    label_color: str = "#627389",
+    compact: bool = False,
+) -> str:
+    """红蓝分段进度条：蓝色段是成功比例，红色段是失败比例，两段宽度之和才是整体完成度。
+
+    这样即便有失败项，只要尝试都跑完了，颜色比例仍能如实反映「大部分成功/大部分失败」，
+    不会像单色进度条那样一有失败就整条变红，掩盖掉已经成功的部分。用一个 div 的
+    linear-gradient 分段代替两个嵌套 div，视觉效果一样，省下一半标签。
+    """
+    done_percent = clamp_percent(done_percent)
+    failed_percent = clamp_percent(failed_percent)
+    if done_percent + failed_percent > 100:
+        failed_percent = max(100 - done_percent, 0)
+    done_end = done_percent
+    failed_end = done_percent + failed_percent
+    height = 6 if compact else 8
+    label_html = (
+        f'<div style="color:{label_color};font-size:12px;font-weight:700;">{html.escape(label)}</div>'
+        if label
+        else ""
+    )
+    return (
+        f'<div style="height:{height}px;border-radius:999px;background:'
+        f"linear-gradient(to right,#168df5 0 {done_end}%,#b83b4b {done_end}% {failed_end}%,"
+        f'#d8e4ef {failed_end}% 100%);"></div>{label_html}'
+    )
 
 
 def build_game_section_text(summary: dict[str, Any], markdown: bool = False) -> str:
@@ -745,7 +772,7 @@ def build_cloud_game_section_text(summary: dict[str, Any], markdown: bool = Fals
 def build_result_section_text(result: dict[str, Any], fallback_summary: str) -> str:
     lines = [
         f"- {result['summary'] or fallback_summary}",
-        f"- 进度 {text_bar(result['percent'])} {result['label']}",
+        f"- 进度 {segmented_text_bar(result['done_percent'], result['failed_percent'])} {result['label']}",
     ]
     for item in result["failed_items"][:6]:
         lines.append(f"- 失败：{item}")
@@ -763,7 +790,8 @@ def build_bbs_section_text(summary: dict[str, Any], markdown: bool = False) -> s
         f"- 米游币数量：实际已获得 {bbs['actual_points']}，本次新增 {bbs['gained_points']}，当前总计 {bbs['total_points'] or '-'}",
     ]
     for task in bbs["tasks"]:
-        lines.append(f"- {task['name']} {text_bar(task['percent'])} {task['label']} ({task['done']}/{task['total']})")
+        bar = segmented_text_bar(task["done_percent"], task["failed_percent"])
+        lines.append(f"- {task['name']} {bar} {task['label']} ({task['done']}/{task['total']})")
     if bbs["summary"]:
         lines.append(f"- {bbs['summary']}")
     return "\n".join(lines)
@@ -837,18 +865,46 @@ def build_account_summary(label: str, lines: list[str], success: bool) -> dict[s
     }
 
 
+def summarize_attempts(done: int, failed: int, total: int) -> dict[str, Any]:
+    """根据成功/失败/预期总数算出展示状态，游戏签到和米游币任务共用同一套判定。
+
+    只要该跑的尝试都跑完了就算「完成」（蓝色），即使中间有失败——失败的比例由
+    进度条自己的红色分段体现，不需要靠整体状态变红来提示，否则 3 次里 2 次成功
+    1 次失败也会被标成「失败」，看起来像是整体没完成。只有全部尝试都失败才整体
+    标「失败」，还没跑完全部尝试则是「部分完成」/「未执行」。
+    """
+    total = max(total, 0)
+    attempted = done + failed
+    done_percent = round(done / total * 100) if total else 0
+    failed_percent = round(failed / total * 100) if total else 0
+    if attempted == 0:
+        label, color = "未执行", "#627389"
+    elif attempted < total:
+        label, color = "部分完成", "#a86d12"
+    elif done == 0:
+        label, color = f"失败 {failed}", "#b83b4b"
+    else:
+        label, color = "完成", "#168df5"
+    return {"done_percent": done_percent, "failed_percent": failed_percent, "label": label, "color": color}
+
+
 def build_result_summary(summary: str, success_items: list[str], failed_items: list[str], success: bool) -> dict[str, Any]:
     counts = parse_counts(summary)
-    total = sum(counts)
-    percent = round(counts[0] / total * 100) if total else (100 if success and summary else 0)
+    done, failed, total = counts[0], counts[1], sum(counts)
+    if not total:
+        done, failed = len(success_items), len(failed_items)
+        total = done + failed
+    status = summarize_attempts(done, failed, total)
     return {
         "present": bool(summary or success_items or failed_items),
         "summary": summary,
-        "success": counts[0],
-        "failed": counts[1],
+        "success": done,
+        "failed": failed,
         "skipped": counts[2],
-        "percent": percent,
-        "label": f"{counts[0]}/{total or counts[0]} 成功",
+        "done_percent": status["done_percent"],
+        "failed_percent": status["failed_percent"],
+        "label": status["label"],
+        "color": status["color"],
         "items": success_items,
         "failed_items": failed_items,
     }
@@ -926,27 +982,16 @@ def task_progress(
         total = max(done + failed, 1)
     else:
         total = max(target, 1)
-    percent = round(done / total * 100)
-    if failed:
-        label = f"失败 {failed}"
-        color = "#b83b4b"
-    elif done >= total:
-        label = "完成"
-        color = "#168df5"
-    elif done > 0:
-        label = "部分完成"
-        color = "#a86d12"
-    else:
-        label = "未执行"
-        color = "#627389"
+    status = summarize_attempts(done, failed, total)
     return {
         "name": name,
         "done": min(done, total),
         "total": total,
         "failed": failed,
-        "percent": percent,
-        "label": label,
-        "color": color,
+        "done_percent": status["done_percent"],
+        "failed_percent": status["failed_percent"],
+        "label": status["label"],
+        "color": status["color"],
     }
 
 
@@ -1050,6 +1095,18 @@ def text_bar(percent: int) -> str:
     return "[" + "#" * filled + "-" * (10 - filled) + f"] {percent}%"
 
 
+def segmented_text_bar(done_percent: int, failed_percent: int) -> str:
+    """纯文本版红蓝分段进度条：`#` 是成功比例，`x` 是失败比例，`-` 是剩余部分。"""
+    done_percent = clamp_percent(done_percent)
+    failed_percent = clamp_percent(failed_percent)
+    if done_percent + failed_percent > 100:
+        failed_percent = max(100 - done_percent, 0)
+    done_filled = min(round(done_percent / 10), 10)
+    failed_filled = min(round(failed_percent / 10), 10 - done_filled)
+    empty = 10 - done_filled - failed_filled
+    return "[" + "#" * done_filled + "x" * failed_filled + "-" * empty + f"] {done_percent}%"
+
+
 def shorten_text(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(limit - 1, 0)] + "…"
 
@@ -1131,7 +1188,9 @@ def build_feishu_post(title: str, message: str, success: bool) -> dict[str, Any]
 
 def normalize_message_lines(message: str) -> list[str]:
     normalized = message.replace("\r\n", "\n").replace("\r", "\n")
-    return [line.rstrip() for line in normalized.split("\n") if line.strip()]
+    lines = [line.rstrip() for line in normalized.split("\n") if line.strip()]
+    # "正在..." 只是进度提示，紧跟着的结果行已经说明了成败，推送里留着只会让内容变长
+    return [line for line in lines if not line.lstrip().startswith("正在")]
 
 
 def extract_summary(lines: list[str], success: bool) -> list[str]:
@@ -1272,6 +1331,18 @@ def send_wecom(client: httpx.Client, webhook: str, msgtype: str, content: str) -
 def request_json(client: httpx.Client, method: str, url: str, **kwargs: Any) -> None:
     response = client.request(method, url, **kwargs)
     response.raise_for_status()
+
+
+def request_pushplus(client: httpx.Client, url: str, payload: dict[str, str]) -> None:
+    """pushplus 内容过大等业务错误仍返回 HTTP 200，必须看 code 才能判断成败。"""
+    response = client.request("POST", url, json=payload)
+    response.raise_for_status()
+    try:
+        data = response.json()
+    except ValueError:
+        return
+    if isinstance(data, dict) and data.get("code") not in (200, None):
+        raise ValueError(f"{data.get('msg') or '请求失败'}: {data.get('data') or ''}".strip(": "))
 
 
 def require(value: str, name: str) -> None:

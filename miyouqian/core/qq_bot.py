@@ -220,7 +220,7 @@ def bind_openid(
 ) -> str:
     """连上网关等用户发验证码，返回对应的 OpenID。
 
-    - `target="user"`：等私聊消息（C2C_MESSAGE_CREATE）或加好友事件（FRIEND_ADD）
+    - `target="user"`：等私聊消息（C2C_MESSAGE_CREATE），必须带上验证码
     - `target="group"`：等群内 @机器人 消息或机器人入群事件（GROUP_ADD_ROBOT）
 
     验证码由调用方先生成并展示。这是阻塞调用，只在 Web 控制台点「绑定」时用；
@@ -350,7 +350,9 @@ def match_openid(
         notify("已收到私聊消息，但验证码不匹配，请发送页面上显示的验证码")
         return ""
     if event == "FRIEND_ADD":
-        return str(data.get("openid") or "")
+        # 被加好友不能证明对方就是配置推送的人，必须靠验证码确认，所以这里只提示不绑定
+        notify("已收到添加好友事件，请继续私聊机器人发送页面上显示的验证码")
+        return ""
     return ""
 
 

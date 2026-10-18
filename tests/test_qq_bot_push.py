@@ -254,8 +254,11 @@ class OpenIdMatchingTest(unittest.TestCase):
         self.assertEqual(qq_bot.match_openid("C2C_MESSAGE_CREATE", data, "9999", False, notify), "")
         notify.assert_called()
 
-    def test_friend_add_event_carries_the_openid_directly(self):
-        self.assertEqual(qq_bot.match_openid("FRIEND_ADD", {"openid": "u2"}, "1234", False, Mock()), "u2")
+    def test_friend_add_event_never_binds_without_the_code(self):
+        notify = Mock()
+        self.assertEqual(qq_bot.match_openid("FRIEND_ADD", {"openid": "u2"}, "1234", False, notify), "")
+        notify.assert_called_once()
+        self.assertIn("验证码", notify.call_args.args[0])
 
     def test_group_message_needs_a_matching_code(self):
         data = {"group_openid": "g1", "content": "1234"}
@@ -351,6 +354,15 @@ class BindGatewayTest(unittest.TestCase):
         }
         openid, _ = self.run_bind([event], target="group")
         self.assertEqual(openid, "G-1")
+
+    def test_friend_added_during_private_bind_is_skipped_until_the_code_arrives(self):
+        friend_add = {"op": 0, "s": 1, "t": "FRIEND_ADD", "d": {"openid": "U-STRANGER"}}
+        right = {
+            "op": 0, "s": 2, "t": "C2C_MESSAGE_CREATE",
+            "d": {"author": {"user_openid": "U-RIGHT"}, "content": "246810"},
+        }
+        openid, _ = self.run_bind([friend_add, right])
+        self.assertEqual(openid, "U-RIGHT")
 
     def test_robot_added_to_group_is_enough(self):
         event = {"op": 0, "s": 3, "t": "GROUP_ADD_ROBOT", "d": {"group_openid": "G-3"}}
