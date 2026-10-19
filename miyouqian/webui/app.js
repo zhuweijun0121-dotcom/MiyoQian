@@ -22,6 +22,7 @@ const pushChannelOptions = [
   ["pushplus", "pushplus"],
   ["serverchan", "Server酱³"],
   ["telegram", "Telegram"],
+  ["telegram", "Telegram"],
   ["dingrobot", "钉钉机器人"],
   ["feishubot", "飞书机器人"],
   ["wecombot", "企业微信机器人"],
@@ -47,15 +48,14 @@ const bbsForumOptions = [
   ["2", "原神"],
   ["6", "崩坏：星穹铁道"],
   ["8", "绝区零"],
-  ["9", "崩坏：因缘精灵"],
   ["1", "崩坏3"],
   ["3", "崩坏学园2"],
   ["4", "未定事件簿"],
+  ["9", "崩坏：因缘精灵"]
 ];
 const defaultBbsForums = ["5", "2"];
 const bbsInteractionDisabledReason =
-  "米游社改版，社区互动已无法获取米游币，待新获取方式更新~";
-
+    "米游社改版，社区互动已无法获取米游币，待新获取方式更新~";
 let config = null;
 let toastTimer = null;
 let autoSaveTimer = null;
@@ -75,18 +75,20 @@ let qqBindRestored = false;
 let editingCaptchaProviders = new Set();
 let logsPinnedToBottom = true;
 let activeView = "dashboard";
+let shopRunningProgress = {};
 let shopGoods = [];
 let shopGames = [{ key: "", name: "全部分区" }];
 let shopSelectedGame = "";
 let shopOpenPlans = new Set();
-let shopRunningProgress = {};
 let shopRequestInFlight = false;
 let shopGoodsLoading = false;
 let shopGoodsLoadSeq = 0;
 let shopExchangeNowGoodsId = "";
 let shopPlanAddressCache = new Map();
+let shopFilterStatus = '';
 let shopCurrentPage = 1;          // 当前页码，从1开始
-const SHOP_PAGE_SIZE = 5;        // 每页显示商品数
+const SHOP_PAGE_SIZE = 4;        // 每页显示商品数
+
 
 const $ = (id) => document.getElementById(id);
 
@@ -123,6 +125,15 @@ async function loadConfig() {
   }));
   renderConfig();
   loadAllPlanAddresses();
+}
+
+function getFilteredGoods() {
+  if (shopFilterStatus === 'sold_out') {
+    return shopGoods.filter(g => isShopGoodSoldOut(g));
+  } else if (shopFilterStatus === 'available') {
+    return shopGoods.filter(g => !isShopGoodSoldOut(g) && canShopGoodExchangeNow(g));
+  }
+  return shopGoods;
 }
 
 function renderConfig() {
@@ -187,18 +198,18 @@ function renderCloudGames() {
 
 function renderBbsForums() {
   const enabled = new Set(
-    (config.bbs?.forums || defaultBbsForums).map((id) => String(id)),
+      (config.bbs?.forums || defaultBbsForums).map((id) => String(id)),
   );
   $("bbsForumChips").innerHTML = bbsForumOptions
-    .map(
-      ([key, label]) => `
+      .map(
+          ([key, label]) => `
         <label class="chip">
           <input type="checkbox" data-bbs-forum="${key}" data-autosave ${enabled.has(key) ? "checked" : ""} />
           <span>${label}</span>
         </label>
       `,
-    )
-    .join("");
+      )
+      .join("");
   updateTaskDependencyState();
 }
 
@@ -206,22 +217,25 @@ function updateTaskDependencyState() {
   const gameEnabled = $("gameCheckin").checked;
   const cloudEnabled = $("cloudGameCheckin").checked;
   const bbsEnabled = $("bbsTasks").checked;
+  const bbsCheckinEnabled = bbsEnabled && $("bbsCheckin").checked;
+  $("bbsForumChips").classList.toggle("is-hidden", !bbsCheckinEnabled);
+  setTaskGroupDisabled("bbsTaskGroup", "[data-bbs-forum]", !bbsCheckinEnabled);
   setTaskGroupDisabled("gameTaskGroup", "[data-game]", !gameEnabled);
   setTaskGroupDisabled(
     "cloudGameTaskGroup",
     "[data-cloud-game]:not([data-cloud-game-disabled])",
     !cloudEnabled,
   );
+
   updateAccountCloudGameInputs();
   setTaskGroupDisabled(
     "bbsTaskGroup",
     "#bbsCheckin",
     !bbsEnabled,
   );
-  const bbsCheckinEnabled = bbsEnabled && $("bbsCheckin").checked;
+  setBbsInteractionDisabled();
   $("bbsForumChips").classList.toggle("is-hidden", !bbsCheckinEnabled);
   setTaskGroupDisabled("bbsTaskGroup", "[data-bbs-forum]", !bbsCheckinEnabled);
-  setBbsInteractionDisabled();
 }
 
 function setTaskGroupDisabled(groupId, selector, disabled) {
@@ -294,10 +308,10 @@ function renderPushChannels() {
             </div>
           </div>
           ${
-            provider === "qqbot" && (editing || qqBindTarget)
+          provider === "qqbot" && (editing || qqBindTarget)
               ? qqBotBindPanel()
               : ""
-          }
+      }
           ${editing ? pushChannelFields(provider, channel || emptyPushChannel(provider)) : pushChannelHiddenFields(channel)}
         </div>
       `;
@@ -457,8 +471,7 @@ function pushChannelFields(provider, channel) {
       <input data-push-field="${name}" type="checkbox" ${common[name] ? "checked" : ""} />
       <span>${label}</span>
     </label>
-  `;
-  // OpenID 可以手填，也可以用下面的绑定按钮自动获取；手填时提示去哪儿找
+  `;  // OpenID 可以手填，也可以用下面的绑定按钮自动获取；手填时提示去哪儿找
   const openidField = (name, placeholder) => `
     <input data-push-field="${name}" type="text" value="${escapeAttr(common[name] || "")}" placeholder="${escapeAttr(placeholder)}" autocomplete="off" />
   `;
@@ -482,22 +495,21 @@ function pushChannelFields(provider, channel) {
       field("push_url", "HTTP API", "text"),
       field("access_token", "Access Token", "text"),
       field("send_id", "Group ID / User ID", "text"),
-      selectBox("msg_type", "推送方式", { group: "QQ群", private: "私信" })
-    ],
+      selectBox("msg_type", "推送方式", { group: "QQ群", private: "私信" })    ],
     qqbot: [
       field("app_id", "AppID"),
       field("client_secret", "AppSecret", "password"),
       selectBox("message_format", "消息格式", { text: "纯文本", markdown: "Markdown" }),
       field("api_base", "接口地址（可留空）"),
       below(
-        "私聊 OpenID",
-        openidField("user_openid", "可手填；或点按钮后用 QQ 私聊机器人发送验证码自动获取"),
-        qqBindButton("user", "绑定私聊"),
+          "私聊 OpenID",
+          openidField("user_openid", "可手填；或点按钮后用 QQ 私聊机器人发送验证码自动获取"),
+          qqBindButton("user", "绑定私聊"),
       ),
       below(
-        "群 OpenID",
-        openidField("group_openid", "可手填；或点按钮后把机器人拉进群、在群里 @机器人"),
-        qqBindButton("group", "绑定群聊"),
+          "群 OpenID",
+          openidField("group_openid", "可手填；或点按钮后把机器人拉进群、在群里 @机器人"),
+          qqBindButton("group", "绑定群聊"),
       ),
     ],
     telegram: [
@@ -524,6 +536,7 @@ function pushChannelFields(provider, channel) {
       checkbox("smtp_ssl", "使用 SSL"),
     ],
   };
+
 
   const fieldsHtml = (fields[provider] || []).join("");
   return `<div class="push-channel-fields form-grid two compact">${fieldsHtml}</div>`;
@@ -561,9 +574,9 @@ function qqBotBindPanel() {
     }
   } else if (state.running) {
     const hint =
-      qqBindTarget === "group"
-        ? "把机器人拉进群，或在群里 @机器人 发送："
-        : "用 QQ 私聊机器人，发送：";
+        qqBindTarget === "group"
+            ? "把机器人拉进群，或在群里 @机器人 发送："
+            : "用 QQ 私聊机器人，发送：";
     body = `<span>${escapeHtml(state.message || `正在等待${targetLabel}消息`)}<br />${hint}<code class="qq-bind-code">${escapeHtml(state.verify_code || "······")}</code></span>
       <div class="qq-bind-actions">
         <button class="ghost" type="button" data-qqbind-cancel="1">取消绑定</button>
@@ -581,7 +594,7 @@ async function startQqBind(target) {
   }
   collectConfig();
   const channel = cleanPushChannel(
-    findPushChannel("qqbot") || emptyPushChannel("qqbot"),
+      findPushChannel("qqbot") || emptyPushChannel("qqbot"),
   );
   if (!channel.app_id || !channel.client_secret) {
     throw new Error("请先填写 AppID 和 AppSecret 再绑定");
@@ -646,14 +659,14 @@ function finishQqBind(state) {
     // 服务端在绑定成功时已经把 OpenID 写进 config.yaml 了，这里重新拉一次配置，
     // 让页面显示的 AppID/AppSecret/OpenID 和磁盘上的保持一致
     loadConfig()
-      .then(() => {
-        renderPushChannels();
-        showToast(`已绑定并保存${target === "group" ? "群聊" : "私聊"} OpenID`);
-      })
-      .catch((error) => {
-        renderPushChannels();
-        showToast(`已绑定，但刷新配置失败：${error.message}`);
-      });
+        .then(() => {
+          renderPushChannels();
+          showToast(`已绑定并保存${target === "group" ? "群聊" : "私聊"} OpenID`);
+        })
+        .catch((error) => {
+          renderPushChannels();
+          showToast(`已绑定，但刷新配置失败：${error.message}`);
+        });
     return;
   }
   renderPushChannels();
@@ -884,6 +897,7 @@ function bindCaptchaChannelEvents() {
       }
     });
   });
+
   document.querySelectorAll("[data-captcha-doc-view]").forEach((button) => {
     button.addEventListener("click", () => {
       showCustomCaptchaDoc().catch((error) => showToast(error.message));
@@ -974,13 +988,13 @@ async function showCustomCaptchaDoc() {
     if (event.target === overlay) close();
   });
   overlay
-    .querySelectorAll("[data-captcha-doc-close]")
-    .forEach((button) => button.addEventListener("click", close));
+      .querySelectorAll("[data-captcha-doc-close]")
+      .forEach((button) => button.addEventListener("click", close));
   overlay
-    .querySelector("[data-captcha-doc-dialog-copy]")
-    .addEventListener("click", () => {
-      copyCustomCaptchaDoc().catch((error) => showToast(error.message));
-    });
+      .querySelector("[data-captcha-doc-dialog-copy]")
+      .addEventListener("click", () => {
+        copyCustomCaptchaDoc().catch((error) => showToast(error.message));
+      });
 }
 
 function captchaChannelFields(provider, channel) {
@@ -1305,7 +1319,7 @@ function collectConfig() {
     ...(config.bbs || {}),
     checkin: $("bbsCheckin").checked,
     forums: Array.from(
-      document.querySelectorAll("[data-bbs-forum]:checked"),
+        document.querySelectorAll("[data-bbs-forum]:checked"),
     ).map((input) => Number(input.dataset.bbsForum)),
     read: false,
     like: false,
@@ -1357,7 +1371,7 @@ function collectPushChannel(row) {
   channel.enable = Boolean(toggle ?.checked);
   row.querySelectorAll("[data-push-field]").forEach((field) => {
     if (["smtp_ssl", "plain_text"].includes(field.dataset.pushField)) {
-    channel[field.dataset.pushField] = field.type === "checkbox" ? field.checked: field.value === "true";
+      channel[field.dataset.pushField] = field.type === "checkbox" ? field.checked: field.value === "true";
   } else if (field.type === "checkbox") {
     channel[field.dataset.pushField] = field.checked;
   } else if (field.tagName === "SELECT") {
@@ -1411,7 +1425,7 @@ function renderShopConfig() {
     const totalPages = Math.max(1, Math.ceil(total / SHOP_PAGE_SIZE));
     $("shopGoodsMetric").textContent = shopGoodsLoading
         ? "加载中"
-        : `${total} 件 (共 ${totalPages} 页)`;
+        : `${total} 件`;
   }
   if ($("shopPlansMetric"))
     $("shopPlansMetric").textContent = String((shop.plans || []).length);
@@ -1442,49 +1456,43 @@ function renderShopGoodsLoadingState() {
   button.classList.toggle("is-loading", shopGoodsLoading);
   if (label) label.textContent = shopGoodsLoading ? "加载中" : "刷新商品";
 }
-
 function renderShopGoods() {
   const list = $("shopGoods");
   if (!list) return;
 
-  // 加载中状态
   if (shopGoodsLoading) {
     list.innerHTML = `<div class="empty-state shop-empty shop-loading">
         <span class="qr-loading" aria-hidden="true"></span>
         <strong>商品加载中</strong>
         <span>正在获取商品图片、兑换时间、库存和限购信息。</span>
       </div>`;
-    renderShopPagination(0);
+    renderShopPagination();
     return;
   }
 
-  // 计算分页
-  const total = shopGoods.length;
+  const filtered = getFilteredGoods();
+  const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / SHOP_PAGE_SIZE));
   if (shopCurrentPage > totalPages) shopCurrentPage = totalPages;
-
+  if (shopCurrentPage < 1) shopCurrentPage = 1;
   const start = (shopCurrentPage - 1) * SHOP_PAGE_SIZE;
-  const end = Math.min(start + SHOP_PAGE_SIZE, total);
-  const pageGoods = shopGoods.slice(start, end);
+  const pageGoods = filtered.slice(start, start + SHOP_PAGE_SIZE);
 
-  // 渲染商品卡片
   if (pageGoods.length) {
     list.innerHTML = pageGoods
-        .map((good, index) => shopGoodCard(good, start + index))  // 传递全局索引
+        .map((good) => shopGoodCard(good, shopGoods.indexOf(good)))  // 全局索引
         .join("");
   } else {
     list.innerHTML = `<div class="empty-state shop-empty">
         <strong>暂无商品数据</strong>
-        <span>点击刷新商品后，会显示兑换时间、库存、价格和图片。</span>
+        <span>${shopFilterStatus ? "当前筛选条件下没有商品。" : "点击刷新商品后，会显示兑换时间、库存、价格和图片。"}</span>
       </div>`;
   }
 
   bindShopGoodsEvents();
-  renderShopPagination(totalPages);
+  renderShopPagination();
 }
-
-function renderShopPagination(totalPages) {
-  // 查找或创建分页容器
+function renderShopPagination(){
   let container = $("shopPagination");
   const list = $("shopGoods");
 
@@ -1494,20 +1502,21 @@ function renderShopPagination(totalPages) {
     container.className = "shop-pagination";
     list.parentNode.insertBefore(container, list.nextSibling);
   }
-
   if (!container) return;
 
-  // 商品总数 <= 每页大小 或 无数据时，隐藏分页
-  if (shopGoods.length <= SHOP_PAGE_SIZE || shopGoods.length === 0) {
+  // 加载中或筛选后不足一页 / 无数据 → 隐藏分页
+  const filtered = shopGoodsLoading ? [] : getFilteredGoods();
+  if (filtered.length <= SHOP_PAGE_SIZE) {
     container.innerHTML = "";
     container.style.display = "none";
     return;
   }
   container.style.display = "flex";
 
-  // 构建分页 HTML
+  const total = Math.max(1, Math.ceil(filtered.length / SHOP_PAGE_SIZE));
+  if (shopCurrentPage > total) shopCurrentPage = total;
+  if (shopCurrentPage < 1) shopCurrentPage = 1;
   const current = shopCurrentPage;
-  const total = totalPages;
 
   let html = `
     <button class="ghost page-btn" data-page="prev" ${current <= 1 ? 'disabled' : ''}>
@@ -1515,7 +1524,6 @@ function renderShopPagination(totalPages) {
     </button>
   `;
 
-  // 页码列表（智能显示：首尾 + 当前页前后各2页）
   const pages = getVisiblePages(current, total);
   for (const p of pages) {
     if (p === "...") {
@@ -1534,7 +1542,6 @@ function renderShopPagination(totalPages) {
 
   container.innerHTML = html;
 
-  // 绑定事件
   container.querySelectorAll("[data-page]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const page = btn.dataset.page;
@@ -1548,13 +1555,11 @@ function renderShopPagination(totalPages) {
         return;
       }
       renderShopGoods();
-      // 滚动到商品列表顶部
       const listEl = $("shopGoods");
       if (listEl) listEl.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 }
-
 // 辅助函数：计算可见页码列表
 function getVisiblePages(current, total) {
   const maxVisible = 7;  // 最多显示7个页码
@@ -1645,14 +1650,12 @@ function renderShopPlans() {
       </div>`;
   bindShopPlanEvents();
 }
-
 // 计划绑定的是账号的 stuid，下标只是当前列表里的位置；找不到绑定账号时返回 -1
 function shopPlanAccountIndex(plan, accounts) {
   const stuid = String(plan.account_stuid || "");
   if (!stuid) return Number(plan.account_index || 0);
   return accounts.findIndex((account) => String(account.stuid || "") === stuid);
 }
-
 function shopPlanRow(plan, index) {
   const accounts = config.accounts || [];
   const paused = plan.enable === false;
@@ -1663,19 +1666,19 @@ function shopPlanRow(plan, index) {
   const selectedAccount = shopPlanAccountIndex(plan, accounts);
   // 计划绑定的账号已不在列表里时单独占一项，不能让下拉框悄悄落到第一个账号上
   const missingOption =
-    selectedAccount < 0
-      ? `<option value="" data-stuid="${escapeAttr(plan.account_stuid || "")}" selected>账号已删除，请重新选择</option>`
-      : "";
+      selectedAccount < 0
+          ? `<option value="" data-stuid="${escapeAttr(plan.account_stuid || "")}" selected>账号已删除，请重新选择</option>`
+          : "";
   const accountOptions =
-    accounts.length || missingOption
-      ? missingOption +
-        accounts
-          .map((account, accountIndex) => {
-            const selected = accountIndex === selectedAccount ? "selected" : "";
-            return `<option value="${accountIndex}" data-stuid="${escapeAttr(account.stuid || "")}" ${selected}>${escapeHtml(accountLabel(account))}</option>`;
-          })
-          .join("")
-      : `<option value="0">暂无账号</option>`;
+      accounts.length || missingOption
+          ? missingOption +
+          accounts
+              .map((account, accountIndex) => {
+                const selected = accountIndex === selectedAccount ? "selected" : "";
+                return `<option value="${accountIndex}" data-stuid="${escapeAttr(account.stuid || "")}" ${selected}>${escapeHtml(accountLabel(account))}</option>`;
+              })
+              .join("")
+          : `<option value="0">暂无账号</option>`;
   return `
     <details class="shop-plan ${paused ? "is-paused" : ""}" data-shop-plan="${index}" ${open}>
       <summary class="shop-plan-summary">
@@ -1906,6 +1909,10 @@ async function loadShopGoods() {
   shopSelectedGame = game;
   shopGoodsLoading = true;
   renderShopConfig();
+  shopFilterStatus = '';
+  const filterSelect = document.getElementById("shopStatusFilter");
+  if (filterSelect) filterSelect.value = '';
+  shopCurrentPage = 1;
   try {
     const data = await api(`/api/shop/goods?game=${encodeURIComponent(game)}`);
     if (loadSeq !== shopGoodsLoadSeq) return;
@@ -1980,7 +1987,6 @@ async function buildShopPlan(good, accountIndex) {
     enable: true,
     auto: true,
     account_index: accountIndex,
-    account_stuid: String((config.accounts || [])[accountIndex]?.stuid || ""),
     goods_id: base.goods_id,
     goods_name: base.goods_name,
     icon: base.icon,
@@ -2347,8 +2353,8 @@ function shopPlanStatus(plan, index) {
     const attempt = Number(progress.attempt || 0);
     const message = progress.message || "兑换中";
     return attempt > 0
-      ? `兑换中 · 第 ${attempt} 次尝试 · ${message}`
-      : `兑换中 · ${message}`;
+        ? `兑换中 · 第 ${attempt} 次尝试 · ${message}`
+        : `兑换中 · ${message}`;
   }
   if (plan.last_result) {
     return `${plan.enable === false ? "已暂停，" : ""}最近结果：${plan.last_result}`;
@@ -2497,6 +2503,7 @@ async function refreshStatus() {
   const runningPlans = new Set(exchangeScheduler.running_plans || []);
   const runningCount = exchangeScheduler.running_count ?? runningPlans.size;
   shopRunningProgress = exchangeScheduler.running_progress || {};
+
 
   if ($("shopScheduleMetric")) {
     $("shopScheduleMetric").textContent = runningCount > 0
@@ -3403,17 +3410,25 @@ function injectArrowSymbol() {
 
 function bindEvents() {
   document
-    .querySelectorAll("summary button, summary input")
-    .forEach((control) => {
-      control.addEventListener("click", (event) => event.stopPropagation());
+      .querySelectorAll("summary button, summary input")
+      .forEach((control) => {
+        control.addEventListener("click", (event) => event.stopPropagation());
+      });
+  const statusFilter = document.getElementById("shopStatusFilter");
+  if (statusFilter) {
+    statusFilter.addEventListener("change", () => {
+      shopFilterStatus = statusFilter.value;
+      shopCurrentPage = 1;          // 切换筛选时重置到第一页
+      renderShopGoods();
     });
+  }
   document.addEventListener("change", (event) => {
     if (event.target?.matches?.("[data-autosave]")) {
       if (
-        event.target.id === "gameCheckin" ||
-        event.target.id === "cloudGameCheckin" ||
-        event.target.id === "bbsTasks" ||
-        event.target.id === "bbsCheckin"
+          event.target.id === "gameCheckin" ||
+          event.target.id === "cloudGameCheckin" ||
+          event.target.id === "bbsTasks" ||
+          event.target.id === "bbsCheckin"
       ) {
         updateTaskDependencyState();
       }
@@ -3422,23 +3437,23 @@ function bindEvents() {
   });
   document.addEventListener("input", (event) => {
     if (
-      event.target?.matches?.(
-        'input[type="time"][data-autosave], input[type="datetime-local"][data-autosave], input[type="number"][data-autosave], input[type="text"][data-autosave], select[data-autosave], [data-account-cloud-token][data-autosave]',
-      )
+        event.target?.matches?.(
+            'input[type="time"][data-autosave], input[type="datetime-local"][data-autosave], input[type="number"][data-autosave], input[type="text"][data-autosave], select[data-autosave], [data-account-cloud-token][data-autosave]',
+        )
     ) {
       scheduleAutoSave();
     }
   });
   $("refreshBtn").addEventListener("click", () => {
     Promise.all([loadConfig(), refreshStatus()]).catch((error) =>
-      showToast(error.message),
+        showToast(error.message),
     );
   });
   $("runBtn").addEventListener("click", () =>
-    runNow().catch((error) => showToast(error.message)),
+      runNow().catch((error) => showToast(error.message)),
   );
   $("pushTestBtn")?.addEventListener("click", () =>
-    testPushNow().catch((error) => showToast(error.message)),
+      testPushNow().catch((error) => showToast(error.message)),
   );
   $("logs").addEventListener("scroll", () => {
     logsPinnedToBottom = isScrolledNearBottom($("logs"));
@@ -3452,10 +3467,10 @@ function bindEvents() {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
   $("shopRefreshBtn")?.addEventListener("click", () =>
-    loadShopGoods().catch((error) => showToast(error.message)),
+      loadShopGoods().catch((error) => showToast(error.message)),
   );
   $("shopGameFilter")?.addEventListener("change", () =>
-    loadShopGoods().catch((error) => showToast(error.message)),
+      loadShopGoods().catch((error) => showToast(error.message)),
   );
 }
 

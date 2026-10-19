@@ -326,21 +326,24 @@
                   <p>商品图片、兑换时间、库存、价格与限购信息</p>
                 </div>
                 <div class="shop-tools">
-                  <div class="select-wrapper">
+                  <div class="select-wrapper" style="width: 35%; flex: 0 0 auto;">
                     <select id="shopGameFilter" aria-label="商品分区"></select>
                     <svg class="select-arrow" width="12" height="8" aria-hidden="true">
                       <use href="#arrow-down"/>
                     </svg>
                   </div>
-                </div>
-                <div class="shop-tools">
-
-                  <button
-                          class="ghost"
-                          id="shopRefreshBtn"
-                          type="button"
-                          title="刷新商品"
-                  >
+                  <!-- 新增状态筛选 -->
+                  <div class="select-wrapper" style="width: 25%; flex: 0 0 auto;">
+                    <select id="shopStatusFilter" aria-label="商品状态">
+                      <option value="">全部</option>
+                      <option value="sold_out">已售罄</option>
+                      <option value="available">可兑换</option>
+                    </select>
+                    <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+                      <use href="#arrow-down"/>
+                    </svg>
+                  </div>
+                  <button class="ghost" id="shopRefreshBtn" type="button" title="刷新商品">
                     <svg><use href="#i-refresh"></use></svg>
                     <span>刷新商品</span>
                   </button>
