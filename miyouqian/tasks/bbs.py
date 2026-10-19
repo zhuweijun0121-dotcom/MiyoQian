@@ -36,7 +36,11 @@ class BbsTasks:
         skipped: list[str] = []
         self._add(messages, "== 米游币社区任务 ==")
         self._add(messages, "正在获取米游币任务状态")
-        state = self._task_state()
+        try:
+            state = self._task_state()
+        except Exception as exc:
+            self._add(messages, f"米游币任务状态请求异常: {exc}")
+            state = {}
         if not state:
             self._add(messages, "任务状态获取失败，请检查 cookie/stoken")
             return messages
@@ -70,7 +74,11 @@ class BbsTasks:
         )
         if needs_posts:
             self._add(messages, "正在获取帖子列表")
-            posts = self._posts()
+            try:
+                posts = self._posts()
+            except Exception as exc:
+                self._add(messages, f"帖子列表请求异常: {exc}")
+                posts = []
             if posts:
                 for flag, num_key, label, action in interaction_plan:
                     if self.bbs_config.get(flag, True) and not task_flags[flag]:
@@ -90,7 +98,10 @@ class BbsTasks:
                 if self.bbs_config.get(flag, True) and task_flags[flag]:
                     skipped.append(f"{label}已完成")
                     self._add(messages, f"{label}任务已完成，跳过")
-        state = self._task_state() or state
+        try:
+            state = self._task_state() or state
+        except Exception as exc:
+            self._add(messages, f"米游币最终进度请求异常，沿用此前数据: {exc}")
         final_received = int(state.get("already_received_points") or received)
         final_can_get = max(possible_today - final_received, 0)
         final_total = int(state.get("total_points") or total)
@@ -188,31 +199,37 @@ class BbsTasks:
             forum = c.BBS_FORUMS.get(int(forum_id))
             if not forum:
                 continue
-            self._add(messages, f"正在进行{forum['name']}社区签到")
-            body = json.dumps({"gids": forum["id"]}, separators=(",", ":"))
-            headers["DS"] = crypto.ds_x6(body=body)
-            data = self.client.post_json(c.BBS_SIGN_URL, content=body, headers=headers)
-            if data.get("retcode") == 0:
-                self._add(messages, f"{forum['name']} 社区签到成功")
-                success.append(f"{forum['name']}社区签到")
-            elif data.get("retcode") == 1034:
-                retry_data = self._retry_bbs_captcha_request(
-                    messages,
-                    "社区签到",
-                    lambda challenge: self._community_sign_once(headers, body, challenge),
-                )
-                if retry_data.get("retcode") == 0:
+            try:
+                self._add(messages, f"正在进行{forum['name']}社区签到")
+                body = json.dumps({"gids": forum["id"]}, separators=(",", ":"))
+                headers["DS"] = crypto.ds_x6(body=body)
+                data = self.client.post_json(c.BBS_SIGN_URL, content=body, headers=headers)
+                if data.get("retcode") == 0:
                     self._add(messages, f"{forum['name']} 社区签到成功")
                     success.append(f"{forum['name']}社区签到")
-                elif not captcha.is_enabled(self.config):
-                    self._add(messages, f"{forum['name']} 社区签到触发验证码，已跳过")
-                    failed.append(f"{forum['name']}社区签到触发验证码")
+                elif data.get("retcode") == 1034:
+                    retry_data = self._retry_bbs_captcha_request(
+                        messages,
+                        "社区签到",
+                        lambda challenge: self._community_sign_once(headers, body, challenge),
+                    )
+                    if retry_data.get("retcode") == 0:
+                        self._add(messages, f"{forum['name']} 社区签到成功")
+                        success.append(f"{forum['name']}社区签到")
+                    elif not captcha.is_enabled(self.config):
+                        self._add(messages, f"{forum['name']} 社区签到触发验证码，已跳过")
+                        failed.append(f"{forum['name']}社区签到触发验证码")
+                    else:
+                        reason = str(retry_data.get("message") or "未知错误")
+                        self._add(messages, f"{forum['name']} 社区签到验证码重试失败: {reason}")
+                        failed.append(f"{forum['name']}社区签到触发验证码")
                 else:
-                    reason = str(retry_data.get("message") or "未知错误")
-                    self._add(messages, f"{forum['name']} 社区签到验证码重试失败: {reason}")
-                    failed.append(f"{forum['name']}社区签到触发验证码")
-            else:
-                reason = str(data.get("message") or "未知错误")
+                    reason = str(data.get("message") or "未知错误")
+                    self._add(messages, f"{forum['name']} 社区签到失败: {reason}")
+                    failed.append(f"{forum['name']}社区签到 {reason}")
+            except Exception as exc:
+                # 单个条目的网络异常只记为失败，不能连累后面的条目和任务
+                reason = f"请求异常: {exc}"
                 self._add(messages, f"{forum['name']} 社区签到失败: {reason}")
                 failed.append(f"{forum['name']}社区签到 {reason}")
             self._sleep()
@@ -252,13 +269,19 @@ class BbsTasks:
         success: list[str] = []
         failed: list[str] = []
         for post_id, title, _gids in posts:
-            self._add(messages, f"正在浏览: {title}")
-            data = self.client.get_json(c.BBS_DETAIL_URL, params={"post_id": post_id}, headers=self._headers())
-            if data.get("message") == "OK":
-                self._add(messages, f"阅读成功: {title}")
-                success.append(f"看帖 {title}")
-            else:
-                reason = str(data.get("message") or "未知错误")
+            try:
+                self._add(messages, f"正在浏览: {title}")
+                data = self.client.get_json(c.BBS_DETAIL_URL, params={"post_id": post_id}, headers=self._headers())
+                if data.get("message") == "OK":
+                    self._add(messages, f"阅读成功: {title}")
+                    success.append(f"看帖 {title}")
+                else:
+                    reason = str(data.get("message") or "未知错误")
+                    self._add(messages, f"阅读失败: {title} ({reason})")
+                    failed.append(f"看帖 {title} {reason}")
+            except Exception as exc:
+                # 单个条目的网络异常只记为失败，不能连累后面的条目和任务
+                reason = f"请求异常: {exc}"
                 self._add(messages, f"阅读失败: {title} ({reason})")
                 failed.append(f"看帖 {title} {reason}")
             self._sleep()
@@ -269,30 +292,14 @@ class BbsTasks:
         success: list[str] = []
         failed: list[str] = []
         for post_id, title, gids in posts:
-            self._add(messages, f"正在点赞: {title}")
-            data = self.client.post_json(
-                c.BBS_LIKE_URL,
-                json={"post_id": post_id, "is_cancel": False, "gids": gids},
-                headers=self._headers(),
-            )
-            if data.get("message") == "OK":
-                self._add(messages, f"点赞成功: {title}")
-                success.append(f"点赞 {title}")
-                if self.bbs_config.get("cancel_like", True):
-                    self._sleep()
-                    self._add(messages, f"正在取消点赞: {title}")
-                    self.client.post_json(
-                        c.BBS_LIKE_URL,
-                        json={"post_id": post_id, "is_cancel": True, "gids": gids},
-                        headers=self._headers(),
-                    )
-            elif data.get("retcode") == 1034:
-                retry_data = self._retry_bbs_captcha_request(
-                    messages,
-                    "点赞",
-                    lambda challenge: self._like_once(post_id, gids, challenge),
+            try:
+                self._add(messages, f"正在点赞: {title}")
+                data = self.client.post_json(
+                    c.BBS_LIKE_URL,
+                    json={"post_id": post_id, "is_cancel": False, "gids": gids},
+                    headers=self._headers(),
                 )
-                if retry_data.get("message") == "OK":
+                if data.get("message") == "OK":
                     self._add(messages, f"点赞成功: {title}")
                     success.append(f"点赞 {title}")
                     if self.bbs_config.get("cancel_like", True):
@@ -303,17 +310,43 @@ class BbsTasks:
                             json={"post_id": post_id, "is_cancel": True, "gids": gids},
                             headers=self._headers(),
                         )
-                elif not captcha.is_enabled(self.config):
-                    self._add(messages, f"点赞触发验证码，已跳过: {title}")
-                    failed.append(f"点赞 {title} 触发验证码")
+                elif data.get("retcode") == 1034:
+                    retry_data = self._retry_bbs_captcha_request(
+                        messages,
+                        "点赞",
+                        lambda challenge: self._like_once(post_id, gids, challenge),
+                    )
+                    if retry_data.get("message") == "OK":
+                        self._add(messages, f"点赞成功: {title}")
+                        success.append(f"点赞 {title}")
+                        if self.bbs_config.get("cancel_like", True):
+                            self._sleep()
+                            self._add(messages, f"正在取消点赞: {title}")
+                            self.client.post_json(
+                                c.BBS_LIKE_URL,
+                                json={"post_id": post_id, "is_cancel": True, "gids": gids},
+                                headers=self._headers(),
+                            )
+                    elif not captcha.is_enabled(self.config):
+                        self._add(messages, f"点赞触发验证码，已跳过: {title}")
+                        failed.append(f"点赞 {title} 触发验证码")
+                    else:
+                        reason = str(retry_data.get("message") or "未知错误")
+                        self._add(messages, f"点赞验证码重试失败: {title} ({reason})")
+                        failed.append(f"点赞 {title} 触发验证码")
                 else:
-                    reason = str(retry_data.get("message") or "未知错误")
-                    self._add(messages, f"点赞验证码重试失败: {title} ({reason})")
-                    failed.append(f"点赞 {title} 触发验证码")
-            else:
-                reason = str(data.get("message") or "未知错误")
-                self._add(messages, f"点赞失败: {title} ({reason})")
-                failed.append(f"点赞 {title} {reason}")
+                    reason = str(data.get("message") or "未知错误")
+                    self._add(messages, f"点赞失败: {title} ({reason})")
+                    failed.append(f"点赞 {title} {reason}")
+            except Exception as exc:
+                # 单个条目的网络异常只记为失败，不能连累后面的条目和任务
+                reason = f"请求异常: {exc}"
+                if f"点赞 {title}" in success:
+                    # 点赞已经成功，只是取消点赞时网络异常，不影响米游币
+                    self._add(messages, f"取消点赞异常: {title} ({reason})")
+                else:
+                    self._add(messages, f"点赞失败: {title} ({reason})")
+                    failed.append(f"点赞 {title} {reason}")
             self._sleep()
         return {"messages": messages, "success": success, "failed": failed}
 
@@ -322,17 +355,23 @@ class BbsTasks:
         success: list[str] = []
         failed: list[str] = []
         for post_id, title, _gids in posts:
-            self._add(messages, f"正在分享: {title}")
-            data = self.client.get_json(
-                c.BBS_SHARE_URL,
-                params={"entity_id": post_id, "entity_type": 1},
-                headers=self._web_headers(),
-            )
-            if data.get("message") == "OK":
-                self._add(messages, f"分享成功: {title}")
-                success.append(f"分享 {title}")
-            else:
-                reason = str(data.get("message") or "未知错误")
+            try:
+                self._add(messages, f"正在分享: {title}")
+                data = self.client.get_json(
+                    c.BBS_SHARE_URL,
+                    params={"entity_id": post_id, "entity_type": 1},
+                    headers=self._web_headers(),
+                )
+                if data.get("message") == "OK":
+                    self._add(messages, f"分享成功: {title}")
+                    success.append(f"分享 {title}")
+                else:
+                    reason = str(data.get("message") or "未知错误")
+                    self._add(messages, f"分享失败: {title} ({reason})")
+                    failed.append(f"分享 {title} {reason}")
+            except Exception as exc:
+                # 单个条目的网络异常只记为失败，不能连累后面的条目和任务
+                reason = f"请求异常: {exc}"
                 self._add(messages, f"分享失败: {title} ({reason})")
                 failed.append(f"分享 {title} {reason}")
             self._sleep()

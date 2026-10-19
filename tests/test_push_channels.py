@@ -163,28 +163,142 @@ class NormalizeMessageLinesTest(unittest.TestCase):
 
 
 class TaskProgressStatusTest(unittest.TestCase):
-    """推送里游戏签到/米游币任务的进度条：跑完了就算完成，不因为部分失败就整体变红。"""
+    """推送里游戏签到/米游币任务的进度条：重试后成功不算失败，只有真失败才变红。"""
 
-    def test_mixed_result_after_all_attempts_counts_as_done(self) -> None:
-        # 3 次尝试，2 次失败 1 次成功：应该算「完成」（蓝色），失败比例交给分段进度条体现。
+    GAME_RETRY_THEN_SUCCESS = [
+        "# 账号 1/1: 沐晨",
+        "游戏社区签到触发验证码，正在调用自定义接口识别(1/3)",
+        "游戏社区签到验证码识别失败，准备重新获取验证码",
+        "游戏社区签到触发验证码，正在调用自定义接口识别(2/3)",
+        "游戏社区签到验证码提交失败，准备重新获取验证码",
+        "游戏社区签到触发验证码，正在调用自定义接口识别(3/3)",
+        "游戏社区签到验证码已处理，正在重试签到",
+        "沐晨(100) 签到成功，奖励 「原石」x60",
+        "游戏社区签到汇总：成功 1，失败 0，跳过 0",
+        "游戏社区成功项：原神 「原石」x60",
+    ]
+
+    def test_real_failure_is_labeled_failed_even_if_others_succeeded(self) -> None:
         status = notifier.summarize_attempts(done=1, failed=2, total=3)
-        self.assertEqual("完成", status["label"])
-        self.assertEqual("#168df5", status["color"])
+        self.assertEqual("失败 2", status["label"])
+        self.assertEqual("#b83b4b", status["color"])
         self.assertEqual(33, status["done_percent"])
         self.assertEqual(67, status["failed_percent"])
 
-    def test_total_failure_is_still_labeled_failed(self) -> None:
+    def test_total_failure_is_labeled_failed(self) -> None:
         status = notifier.summarize_attempts(done=0, failed=3, total=3)
         self.assertEqual("失败 3", status["label"])
         self.assertEqual("#b83b4b", status["color"])
+        self.assertEqual(100, status["failed_percent"])
 
-    def test_html_progress_bar_renders_both_color_segments(self) -> None:
+    def test_failed_retries_before_success_still_count_as_done(self) -> None:
+        # 3 次尝试 2 次失败 1 次成功：整体是「完成」（蓝），进度条前 2/3 红、后 1/3 蓝。
+        status = notifier.summarize_attempts(done=1, failed=0, total=1, failed_marks=2)
+        self.assertEqual("完成", status["label"])
+        self.assertEqual("#168df5", status["color"])
+        self.assertEqual(67, status["failed_percent"])
+        self.assertEqual(33, status["done_percent"])
+
+    def test_not_all_attempts_made_is_partial_and_nothing_made_is_not_executed(self) -> None:
+        self.assertEqual("部分完成", notifier.summarize_attempts(done=1, failed=0, total=3)["label"])
+        self.assertEqual("未执行", notifier.summarize_attempts(done=0, failed=0, total=3)["label"])
+
+    def test_skipped_items_do_not_make_the_result_partial(self) -> None:
+        result = notifier.build_result_summary("游戏签到汇总：成功 2，失败 0，跳过 1", [], [], True)
+        self.assertEqual("完成", result["label"])
+        self.assertEqual(100, result["done_percent"])
+        self.assertEqual(0, result["failed_percent"])
+
+    def test_failed_marks_cover_retries_but_not_first_try_success(self) -> None:
+        # 参数依次是：最终失败项数、其中触发验证码的项数、验证码尝试次数、触发验证码的项目数
+        self.assertEqual(2, notifier.count_failed_marks(0, 0, 3, 1))  # 失败 2 次后成功
+        self.assertEqual(3, notifier.count_failed_marks(1, 1, 3, 1))  # 3 次都失败
+        self.assertEqual(0, notifier.count_failed_marks(0, 0, 1, 1))  # 一次就过
+        self.assertEqual(1, notifier.count_failed_marks(1, 0, 0, 0))  # 没有验证码，普通失败
+        self.assertEqual(2, notifier.count_failed_marks(1, 0, 2, 1))  # 1 个普通失败 + 另一项失败 1 次后成功
+
+    def test_captcha_attempts_are_scoped_to_their_own_scene(self) -> None:
+        lines = [
+            "游戏社区签到触发验证码，正在调用打码狗识别(1/3)",
+            "社区签到触发验证码，正在调用打码狗识别(1/3)",
+            "社区签到触发验证码，正在调用打码狗识别(2/3)",
+            "点赞触发验证码，正在调用打码狗识别(1/3)",
+        ]
+        self.assertEqual((1, 1), notifier.count_captcha_attempts(lines, "游戏社区签到"))
+        self.assertEqual((2, 1), notifier.count_captcha_attempts(lines, "社区签到"))
+        self.assertEqual((1, 1), notifier.count_captcha_attempts(lines, "点赞"))
+
+    def test_game_retry_then_success_is_done_with_red_before_blue(self) -> None:
+        game = notifier.build_structured_summary(self.GAME_RETRY_THEN_SUCCESS, True)["sections"][0]["game"]
+        self.assertEqual(0, game["failed"])
+        self.assertEqual("完成", game["label"])
+        self.assertEqual("#168df5", game["color"])
+        self.assertEqual(67, game["failed_percent"])
+        self.assertEqual(33, game["done_percent"])
+        self.assertTrue(notifier.is_task_success(self.GAME_RETRY_THEN_SUCCESS))
+
+    def test_game_captcha_failing_every_attempt_is_all_red(self) -> None:
+        lines = [
+            "# 账号 1/1: 沐晨",
+            "游戏社区签到触发验证码，正在调用自定义接口识别(1/3)",
+            "游戏社区签到验证码识别失败，准备重新获取验证码",
+            "游戏社区签到触发验证码，正在调用自定义接口识别(2/3)",
+            "游戏社区签到验证码识别失败，准备重新获取验证码",
+            "游戏社区签到触发验证码，正在调用自定义接口识别(3/3)",
+            "游戏社区签到验证码识别失败，准备重新获取验证码",
+            "沐晨(100) 验证码处理后仍失败: 出错了(1034)",
+            "游戏社区签到汇总：成功 0，失败 1，跳过 0",
+            "游戏社区失败项：原神 触发验证码",
+        ]
+        game = notifier.build_structured_summary(lines, False)["sections"][0]["game"]
+        self.assertEqual("失败 1", game["label"])
+        self.assertEqual("#b83b4b", game["color"])
+        self.assertEqual(100, game["failed_percent"])
+        self.assertEqual(0, game["done_percent"])
+        self.assertFalse(notifier.is_task_success(lines))
+
+    def test_bbs_like_retry_then_success_is_done_with_half_red(self) -> None:
+        lines = [
+            "# 账号 1/1: 沐晨",
+            "点赞触发验证码，正在调用打码狗识别(1/3)",
+            "点赞验证码提交失败，准备重新获取验证码",
+            "点赞触发验证码，正在调用打码狗识别(2/3)",
+            "点赞成功: 帖子 A",
+            "米游币成功项：点赞 帖子 A",
+            "米游币任务汇总：成功 1，失败 0，跳过 0，今日总共可获得 10，实际已获得 10，本次新增 10",
+        ]
+        like = notifier.build_structured_summary(lines, True)["sections"][0]["bbs"]["tasks"][2]
+        self.assertEqual("完成", like["label"])
+        self.assertEqual((1, 1, 0), (like["done"], like["total"], like["failed"]))
+        self.assertEqual(50, like["failed_percent"])
+        self.assertEqual(50, like["done_percent"])
+
+    def test_html_progress_bar_puts_red_before_blue(self) -> None:
         bar = notifier.segmented_progress_html(33, 67, "完成", "#168df5")
-        self.assertIn("#168df5 0 33%", bar)
-        self.assertIn("#b83b4b 33% 100%", bar)
+        self.assertIn("#b83b4b 0 67%", bar)
+        self.assertIn("#168df5 67% 100%", bar)
+        self.assertLess(bar.index("#b83b4b"), bar.index("#168df5 67%"))
 
-    def test_text_progress_bar_uses_hash_and_x_markers(self) -> None:
-        self.assertEqual("[###xxxxxxx] 33%", notifier.segmented_text_bar(33, 67))
+    def test_html_progress_bar_caps_overflow_from_rounding(self) -> None:
+        bar = notifier.segmented_progress_html(70, 40, "失败 1", "#b83b4b")
+        self.assertIn("#b83b4b 0 40%", bar)
+        self.assertIn("#168df5 40% 100%", bar)
+
+    def test_text_progress_bar_puts_x_before_hash(self) -> None:
+        self.assertEqual("[xxxxxxx###] 33%", notifier.segmented_text_bar(33, 67))
+
+    def test_text_progress_bar_keeps_a_tiny_segment_visible(self) -> None:
+        self.assertEqual("[x#########] 96%", notifier.segmented_text_bar(96, 4))
+        self.assertEqual("[#---------] 4%", notifier.segmented_text_bar(4, 0))
+        self.assertEqual("[----------] 0%", notifier.segmented_text_bar(0, 0))
+
+    def test_rendered_push_shows_retry_then_success_as_completed(self) -> None:
+        message = "\n".join(self.GAME_RETRY_THEN_SUCCESS)
+        html_body = notifier.build_push_html("米游签任务完成", message, True)
+        self.assertLess(html_body.index("#b83b4b 0 67%"), html_body.index("#168df5 67% 100%"))
+        markdown = notifier.build_push_markdown("米游签任务完成", message, True)
+        self.assertIn("[xxxxxxx###] 33% 完成", markdown)
+        self.assertNotIn("失败 1", markdown)
 
     def test_push_title_reflects_failure_instead_of_always_saying_completed(self) -> None:
         lines = [
@@ -196,6 +310,12 @@ class TaskProgressStatusTest(unittest.TestCase):
             notifier.send_task_push({"push": {"enable": True}}, lines)
         self.assertEqual("米游签任务失败", send_push.call_args.args[1])
         self.assertFalse(send_push.call_args.kwargs["success"])
+
+    def test_push_title_stays_completed_when_failed_attempts_ended_in_success(self) -> None:
+        with patch.object(notifier, "send_push", return_value="sent") as send_push:
+            notifier.send_task_push({"push": {"enable": True}}, self.GAME_RETRY_THEN_SUCCESS)
+        self.assertEqual("米游签任务完成", send_push.call_args.args[1])
+        self.assertTrue(send_push.call_args.kwargs["success"])
 
 
 class PushChannelConfigTest(unittest.TestCase):

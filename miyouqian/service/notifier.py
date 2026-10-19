@@ -730,18 +730,15 @@ def segmented_progress_html(
     label_color: str = "#627389",
     compact: bool = False,
 ) -> str:
-    """红蓝分段进度条：蓝色段是成功比例，红色段是失败比例，两段宽度之和才是整体完成度。
+    """红蓝分段进度条，从左到右依次是红（失败的尝试）、蓝（成功）、灰（未执行）。
 
-    这样即便有失败项，只要尝试都跑完了，颜色比例仍能如实反映「大部分成功/大部分失败」，
-    不会像单色进度条那样一有失败就整条变红，掩盖掉已经成功的部分。用一个 div 的
+    先失败后成功的任务就是前红后蓝，两段宽度之和才是整体完成度。用一个 div 的
     linear-gradient 分段代替两个嵌套 div，视觉效果一样，省下一半标签。
     """
-    done_percent = clamp_percent(done_percent)
     failed_percent = clamp_percent(failed_percent)
-    if done_percent + failed_percent > 100:
-        failed_percent = max(100 - done_percent, 0)
-    done_end = done_percent
-    failed_end = done_percent + failed_percent
+    done_percent = min(clamp_percent(done_percent), 100 - failed_percent)
+    failed_end = failed_percent
+    done_end = failed_percent + done_percent
     height = 6 if compact else 8
     label_html = (
         f'<div style="color:{label_color};font-size:12px;font-weight:700;">{html.escape(label)}</div>'
@@ -750,8 +747,8 @@ def segmented_progress_html(
     )
     return (
         f'<div style="height:{height}px;border-radius:999px;background:'
-        f"linear-gradient(to right,#168df5 0 {done_end}%,#b83b4b {done_end}% {failed_end}%,"
-        f'#d8e4ef {failed_end}% 100%);"></div>{label_html}'
+        f"linear-gradient(to right,#b83b4b 0 {failed_end}%,#168df5 {failed_end}% {done_end}%,"
+        f'#d8e4ef {done_end}% 100%);"></div>{label_html}'
     )
 
 
@@ -831,6 +828,8 @@ def build_account_summary(label: str, lines: list[str], success: bool) -> dict[s
         task_items(lines, "游戏社区成功项：") + task_items(lines, "游戏成功项："),
         task_items(lines, "游戏社区失败项：") + task_items(lines, "游戏失败项："),
         success,
+        lines,
+        "游戏社区签到",
     )
     cloud_game = build_result_summary(
         first_line(lines, "云游戏签到汇总："),
@@ -865,36 +864,79 @@ def build_account_summary(label: str, lines: list[str], success: bool) -> dict[s
     }
 
 
-def summarize_attempts(done: int, failed: int, total: int) -> dict[str, Any]:
-    """根据成功/失败/预期总数算出展示状态，游戏签到和米游币任务共用同一套判定。
+CAPTCHA_ATTEMPT_MARK = "触发验证码，正在调用"
 
-    只要该跑的尝试都跑完了就算「完成」（蓝色），即使中间有失败——失败的比例由
-    进度条自己的红色分段体现，不需要靠整体状态变红来提示，否则 3 次里 2 次成功
-    1 次失败也会被标成「失败」，看起来像是整体没完成。只有全部尝试都失败才整体
-    标「失败」，还没跑完全部尝试则是「部分完成」/「未执行」。
+
+def count_captcha_attempts(lines: list[str], scene: str) -> tuple[int, int]:
+    """统计某类任务的验证码识别尝试，返回 (尝试总次数, 触发验证码的项目数)。
+
+    每个项目触发验证码后会连续尝试 (1/N)、(2/N)…，所以序号为 1 的行就是一个新项目的开始。
+    scene 必须是日志行的开头（如「点赞」「游戏社区签到」），避免「社区签到」误匹配「游戏社区签到」。
+    """
+    pattern = re.compile(rf"^{re.escape(scene)}{CAPTCHA_ATTEMPT_MARK}.+识别\((\d+)/\d+\)$")
+    attempts = episodes = 0
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            attempts += 1
+            episodes += match.group(1) == "1"
+    return attempts, episodes
+
+
+def count_failed_marks(failed: int, captcha_failed: int, attempts: int, episodes: int) -> int:
+    """进度条里红色段的数量：最终失败的项目 + 重试时失败、但项目最终成功的验证码尝试。
+
+    触发验证码的项目最多尝试 N 次：N 次都失败才是真正的失败（N 段红）；
+    前几次失败、最后一次成功的，前几次画成红色，最后一次是蓝色，整体仍算成功。
+    """
+    if not attempts:
+        return failed
+    captcha_failed = min(captcha_failed, episodes, failed)
+    recovered = episodes - captcha_failed
+    return (failed - captcha_failed) + (attempts - recovered)
+
+
+def summarize_attempts(done: int, failed: int, total: int, failed_marks: int | None = None) -> dict[str, Any]:
+    """根据成功/最终失败的项目数算出状态标签，并给出进度条的红蓝比例。
+
+    done / failed 是项目的最终结果：重试后成功的项目算 done，只有重试用完仍失败的才算 failed。
+    failed_marks 是进度条红色段数量（包含重试时失败的尝试），缺省等于 failed。
+    进度条从左到右依次是 红（失败的尝试）、蓝（成功）、灰（还没执行），所以先失败后成功是前红后蓝。
     """
     total = max(total, 0)
+    marks = failed if failed_marks is None else max(failed_marks, 0)
+    pending = max(total - done - failed, 0)
+    bar_total = done + marks + pending
+    failed_percent = round(marks / bar_total * 100) if bar_total else 0
+    done_percent = round(done / bar_total * 100) if bar_total else 0
+    done_percent = min(done_percent, 100 - failed_percent)
     attempted = done + failed
-    done_percent = round(done / total * 100) if total else 0
-    failed_percent = round(failed / total * 100) if total else 0
     if attempted == 0:
         label, color = "未执行", "#627389"
+    elif failed:
+        label, color = f"失败 {failed}", "#b83b4b"
     elif attempted < total:
         label, color = "部分完成", "#a86d12"
-    elif done == 0:
-        label, color = f"失败 {failed}", "#b83b4b"
     else:
         label, color = "完成", "#168df5"
     return {"done_percent": done_percent, "failed_percent": failed_percent, "label": label, "color": color}
 
 
-def build_result_summary(summary: str, success_items: list[str], failed_items: list[str], success: bool) -> dict[str, Any]:
+def build_result_summary(
+    summary: str,
+    success_items: list[str],
+    failed_items: list[str],
+    success: bool,
+    lines: list[str] | None = None,
+    captcha_scene: str = "",
+) -> dict[str, Any]:
     counts = parse_counts(summary)
-    done, failed, total = counts[0], counts[1], sum(counts)
-    if not total:
+    done, failed = counts[0], counts[1]
+    if not (done or failed):
         done, failed = len(success_items), len(failed_items)
-        total = done + failed
-    status = summarize_attempts(done, failed, total)
+    attempts, episodes = count_captcha_attempts(lines or [], captcha_scene) if captcha_scene else (0, 0)
+    captcha_failed = sum(1 for item in failed_items if "触发验证码" in item)
+    status = summarize_attempts(done, failed, done + failed, count_failed_marks(failed, captcha_failed, attempts, episodes))
     return {
         "present": bool(summary or success_items or failed_items),
         "summary": summary,
@@ -922,6 +964,7 @@ def build_bbs_tasks(lines: list[str]) -> list[dict[str, Any]]:
             lambda line: line.startswith("正在进行") and line.endswith("社区签到"),
             ("社区签到成功", "社区签到已完成"),
             ("社区签到失败", "社区签到验证码重试失败", "社区签到触发验证码，已跳过"),
+            "社区签到",
         ),
         (
             "看帖任务",
@@ -940,6 +983,7 @@ def build_bbs_tasks(lines: list[str]) -> list[dict[str, Any]]:
             lambda line: line.startswith("正在点赞:"),
             ("点赞成功", "点赞任务已完成"),
             ("点赞失败", "点赞验证码重试失败", "点赞触发验证码，已跳过"),
+            "点赞",
         ),
         (
             "分享任务",
@@ -965,14 +1009,17 @@ def task_progress(
     start_matcher: Callable[[str], bool],
     done_keywords: tuple[str, ...],
     fail_keywords: tuple[str, ...],
+    captcha_scene: str = "",
 ) -> dict[str, Any]:
     completed_by_skip = any(any(keyword in line for keyword in skip_keywords) for line in lines)
     started = sum(1 for line in lines if start_matcher(line))
     done = count_task_items(success_items, item_keywords)
     failed = count_task_items(failed_items, item_keywords)
+    captcha_failed = sum(1 for item in failed_items if "触发验证码" in item and any(k in item for k in item_keywords))
     if not success_items and not failed_items:
         done = count_keyword_hits(lines, done_keywords)
         failed = count_keyword_hits(lines, fail_keywords)
+        captcha_failed = count_keyword_hits(lines, tuple(k for k in fail_keywords if "验证码" in k))
     if completed_by_skip:
         total = max(target, started, done, failed, 1)
         done = max(done, total)
@@ -982,7 +1029,8 @@ def task_progress(
         total = max(done + failed, 1)
     else:
         total = max(target, 1)
-    status = summarize_attempts(done, failed, total)
+    attempts, episodes = count_captcha_attempts(lines, captcha_scene) if captcha_scene else (0, 0)
+    status = summarize_attempts(done, failed, total, count_failed_marks(failed, captcha_failed, attempts, episodes))
     return {
         "name": name,
         "done": min(done, total),
@@ -1096,15 +1144,20 @@ def text_bar(percent: int) -> str:
 
 
 def segmented_text_bar(done_percent: int, failed_percent: int) -> str:
-    """纯文本版红蓝分段进度条：`#` 是成功比例，`x` 是失败比例，`-` 是剩余部分。"""
-    done_percent = clamp_percent(done_percent)
+    """纯文本版红蓝分段进度条，顺序同 HTML：`x` 是失败的尝试，`#` 是成功，`-` 是未执行。
+
+    不足一格的非零比例也至少画一格，免得 1 次失败夹在十几次成功里被四舍五入吞掉。
+    """
     failed_percent = clamp_percent(failed_percent)
-    if done_percent + failed_percent > 100:
-        failed_percent = max(100 - done_percent, 0)
-    done_filled = min(round(done_percent / 10), 10)
-    failed_filled = min(round(failed_percent / 10), 10 - done_filled)
-    empty = 10 - done_filled - failed_filled
-    return "[" + "#" * done_filled + "x" * failed_filled + "-" * empty + f"] {done_percent}%"
+    done_percent = min(clamp_percent(done_percent), 100 - failed_percent)
+    failed_filled = text_bar_cells(failed_percent)
+    done_filled = min(text_bar_cells(done_percent), 10 - failed_filled)
+    empty = 10 - failed_filled - done_filled
+    return "[" + "x" * failed_filled + "#" * done_filled + "-" * empty + f"] {done_percent}%"
+
+
+def text_bar_cells(percent: int) -> int:
+    return min(max(round(percent / 10), 1), 10) if percent else 0
 
 
 def shorten_text(text: str, limit: int) -> str:

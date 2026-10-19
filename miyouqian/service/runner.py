@@ -34,6 +34,16 @@ def run_tasks(
         elif emit:
             emit(message)
 
+    def run_stage(stage: str, component: str, failed_prefix: str, run: Callable[[], list[str]]) -> None:
+        try:
+            lines = run()
+        except Exception as exc:
+            # 某个阶段整体异常也只记为该阶段失败，后面的阶段和账号照常执行
+            add(f"{failed_prefix}{stage}执行异常: {exc}", component)
+            return
+        if not should_emit:
+            output.extend(lines)
+
     if games_only and bbs_only:
         raise ValueError("games_only 和 bbs_only 不能同时启用")
     if not config.get("enable", True):
@@ -48,31 +58,40 @@ def run_tasks(
         for index, account in enumerate(accounts, start=1):
             add(f"# 账号 {index}/{len(accounts)}: {account.get('name', '未命名')}")
             if not bbs_only and config.get("features", {}).get("game_checkin", True):
-                lines = GameCheckin(
-                    client,
-                    config,
-                    account,
-                    emit=(lambda message: add(message, "game")) if should_emit else None,
-                ).run(only_games=only_games)
-                if not should_emit:
-                    output.extend(lines)
+                run_stage(
+                    "游戏社区签到",
+                    "game",
+                    "游戏社区失败项：",
+                    lambda: GameCheckin(
+                        client,
+                        config,
+                        account,
+                        emit=(lambda message: add(message, "game")) if should_emit else None,
+                    ).run(only_games=only_games),
+                )
             if not bbs_only and config.get("features", {}).get("cloud_game_checkin", False):
-                lines = CloudGameCheckin(
-                    client,
-                    config,
-                    account,
-                    emit=(lambda message: add(message, "cloud")) if should_emit else None,
-                ).run()
-                if not should_emit:
-                    output.extend(lines)
+                run_stage(
+                    "云游戏签到",
+                    "cloud",
+                    "云游戏失败项：",
+                    lambda: CloudGameCheckin(
+                        client,
+                        config,
+                        account,
+                        emit=(lambda message: add(message, "cloud")) if should_emit else None,
+                    ).run(),
+                )
             if not games_only and config.get("features", {}).get("bbs_tasks", False):
-                lines = BbsTasks(
-                    client,
-                    config,
-                    account,
-                    emit=(lambda message: add(message, "bbs")) if should_emit else None,
-                ).run()
-                if not should_emit:
-                    output.extend(lines)
+                run_stage(
+                    "米游币任务",
+                    "bbs",
+                    "米游币失败项：",
+                    lambda: BbsTasks(
+                        client,
+                        config,
+                        account,
+                        emit=(lambda message: add(message, "bbs")) if should_emit else None,
+                    ).run(),
+                )
     save_config(config_path, config)
     return output

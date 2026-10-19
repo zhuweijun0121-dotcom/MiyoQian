@@ -33,10 +33,6 @@ body {
   display: inline-block;
   width: 100%;
 }
-.top-button{
-
-  flex: 0 0 auto;
-}
 
 .select-wrapper select {
   appearance: none;
@@ -83,12 +79,20 @@ body {
 }
 
 /* 页码按钮 */
-.shop-pagination-jump .page-btn {
-  min-width: 52px;
+.shop-pagination .page-btn {
+  min-width: 32px;
   height: 32px;
-  padding: 0 10px;
+  padding: 0 6px;
   border-radius: 6px;
   font-size: 14px;
+  color: var(--text-secondary, #6b7280);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
 }
 
 .shop-pagination .page-btn:hover:not(:disabled) {
@@ -510,21 +514,17 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.form-grid.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 14px;
-}
 .form-grid.three {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.form-grid.compact {
-  margin-top: 12px;
+.form-grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 14px;
 }
 
-.task-group {
-  display: grid;
-  gap: 12px;
+.form-grid.compact {
+  margin-top: 12px;
 }
 
 #bbsTaskGroup {
@@ -537,6 +537,11 @@ textarea:focus {
 
 .chips.compact {
   margin-top: 0;
+}
+
+.task-group {
+  display: grid;
+  gap: 12px;
 }
 
 .task-group + .task-group {
@@ -587,6 +592,111 @@ textarea:focus {
 
 .push-channel-fields {
   margin-top: 0;
+}
+
+/* QQ 机器人的 OpenID 要配绑定按钮，单独竖排并占满一行 */
+.push-channel-fields > .push-field-stack,
+.push-channel-fields > .qq-bind-panel {
+  grid-column: 1 / -1;
+}
+
+.push-field-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.push-field-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.push-field-label + .push-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.push-field-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.qq-bind-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.qq-bind-panel.is-error {
+  border-color: #e3b4bc;
+  background: #fdf5f6;
+  color: #b83b4b;
+}
+
+.qq-bind-panel.is-success {
+  border-color: #b6ddc9;
+  background: #f2faf6;
+  color: #1c7c61;
+}
+
+.qq-bind-panel > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qq-bind-code {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #eaf3fb;
+  color: #168df5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.qq-bind-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.captcha-tips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.captcha-tips > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.captcha-tips-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.captcha-tips-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .task-group.is-disabled .chips,
@@ -1340,6 +1450,25 @@ textarea:focus {
 
 .geetest-dialog {
   width: min(360px, calc(100vw - 32px));
+}
+
+.captcha-doc-dialog {
+  width: min(780px, 100%);
+  max-height: calc(100vh - 40px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.captcha-doc-text {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .geetest-box {

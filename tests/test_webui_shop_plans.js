@@ -125,3 +125,53 @@ test("new plans are bound to the chosen account's stuid", async () => {
   assert.equal(plan.account_index, 1);
   assert.equal(plan.account_stuid, C.stuid);
 });
+
+function setShopGoods(goods, status = "") {
+  ui.goods = goods;
+  vm.runInContext(`shopGoods = goods; shopFilterStatus = ${JSON.stringify(status)}; shopCurrentPage = 1`, ui);
+}
+
+test("the status filter separates sold-out goods from those exchangeable now", () => {
+  setShopGoods([
+    { goods_id: "g0", sold_out: true },
+    { goods_id: "g1", display_status: "online" },
+    { goods_id: "g2", display_status: "always" },
+    { goods_id: "g3", display_status: "upcoming" },
+  ]);
+  const ids = (status) => {
+    vm.runInContext(`shopFilterStatus = ${JSON.stringify(status)}`, ui);
+    return ui.getFilteredGoods().map((good) => good.goods_id);
+  };
+  assert.deepEqual(ids(""), ["g0", "g1", "g2", "g3"]);
+  assert.deepEqual(ids("sold_out"), ["g0"]);
+  assert.deepEqual(ids("available"), ["g1", "g2"]);
+});
+
+test("filtered goods keep their index in the full list and short results hide the pager", () => {
+  const originalDocument = ui.document;
+  const elements = {};
+  ui.document = {
+    ...originalDocument,
+    getElementById: (id) => (elements[id] ??= { innerHTML: "", style: {}, addEventListener() {} }),
+  };
+  const originalCard = ui.shopGoodCard;
+  ui.shopGoodCard = (good, index) => `[${good.goods_id}@${index}]`;
+  try {
+    const goods = Array.from({ length: 6 }, (_, i) => ({
+      goods_id: `g${i}`,
+      ...(i % 2 ? { sold_out: true } : { display_status: "online" }),
+    }));
+    setShopGoods(goods, "available");
+    ui.renderShopGoods();
+    assert.equal(elements.shopGoods.innerHTML, "[g0@0][g2@2][g4@4]");
+    assert.equal(elements.shopPagination.style.display, "none");
+
+    setShopGoods(goods.map((good) => ({ ...good, sold_out: false, display_status: "online" })), "sold_out");
+    ui.renderShopGoods();
+    assert.match(elements.shopGoods.innerHTML, /当前筛选条件下没有商品/);
+  } finally {
+    ui.document = originalDocument;
+    ui.shopGoodCard = originalCard;
+    setShopGoods([]);
+  }
+});

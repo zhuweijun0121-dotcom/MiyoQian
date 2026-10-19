@@ -62,13 +62,21 @@ class GameCheckin:
         skipped: list[str] = []
         self._add(messages, f"== {name} ==")
         self._add(messages, f"正在获取{name}绑定角色")
-        roles = self._get_roles(game)
+        awards: list[dict[str, Any]] = []
+        try:
+            roles = self._get_roles(game)
+            if roles:
+                self._add(messages, f"正在获取{name}签到奖励列表")
+                awards = self._get_awards(game)
+        except Exception as exc:
+            reason = f"请求异常: {exc}"
+            self._add(messages, f"{name} 签到失败: {reason}")
+            failed.append(f"{name} {reason}")
+            return {"messages": messages, "success": success, "failed": failed, "skipped": skipped}
         if not roles:
             self._add(messages, "未找到绑定角色")
             skipped.append(f"{name}: 未找到绑定角色")
             return {"messages": messages, "success": success, "failed": failed, "skipped": skipped}
-        self._add(messages, f"正在获取{name}签到奖励列表")
-        awards = self._get_awards(game)
         blacklist = set(self.config.get("games", {}).get("black_list", {}).get(game_key, []))
         for role in roles:
             uid = str(role.get("game_uid") or "")
@@ -78,54 +86,60 @@ class GameCheckin:
                 self._add(messages, f"{nickname}({uid}) 在黑名单中，跳过")
                 skipped.append(label)
                 continue
-            self._add(messages, f"正在查询{label}签到状态")
-            info = self._get_info(game, role)
-            if info.get("first_bind"):
-                self._add(messages, f"{nickname}({uid}) 首次绑定，请先手动签到一次")
-                skipped.append(label)
-                continue
-            signed = bool(info.get("is_sign"))
-            day_index = max(int(info.get("total_sign_day") or 1) - 1, 0)
-            if signed:
-                reward = describe_award(awards, day_index)
-                self._add(messages, f"{nickname}({uid}) 今日已签到，奖励 {reward}")
-                success.append(f"{label} 已签到 {reward}")
-                continue
-            self._add(messages, f"正在为{label}签到")
-            result = self._sign(game, role)
-            if result.get("retcode") == -5003:
-                reward = describe_award(awards, day_index)
-                self._add(messages, f"{nickname}({uid}) 今日已签到，奖励 {reward}")
-                success.append(f"{label} 已签到 {reward}")
-                continue
-            if result.get("retcode") != 0:
-                reason = f"{result.get('message')}({result.get('retcode')})"
-                self._add(messages, f"{nickname}({uid}) 签到失败: {reason}")
-                failed.append(f"{label} {reason}")
-                continue
-            sign_data = result.get("data") or {}
-            if sign_data.get("success") == 1:
-                result = self._retry_captcha_sign(messages, game, role, result)
+            try:
+                self._add(messages, f"正在查询{label}签到状态")
+                info = self._get_info(game, role)
+                if info.get("first_bind"):
+                    self._add(messages, f"{nickname}({uid}) 首次绑定，请先手动签到一次")
+                    skipped.append(label)
+                    continue
+                signed = bool(info.get("is_sign"))
+                day_index = max(int(info.get("total_sign_day") or 1) - 1, 0)
+                if signed:
+                    reward = describe_award(awards, day_index)
+                    self._add(messages, f"{nickname}({uid}) 今日已签到，奖励 {reward}")
+                    success.append(f"{label} 已签到 {reward}")
+                    continue
+                self._add(messages, f"正在为{label}签到")
+                result = self._sign(game, role)
                 if result.get("retcode") == -5003:
                     reward = describe_award(awards, day_index)
                     self._add(messages, f"{nickname}({uid}) 今日已签到，奖励 {reward}")
                     success.append(f"{label} 已签到 {reward}")
                     continue
-                if result.get("retcode") == 0 and (result.get("data") or {}).get("success") != 1:
-                    reward = describe_award(awards, day_index + 1)
-                    self._add(messages, f"{nickname}({uid}) 签到成功，奖励 {reward}")
-                    success.append(f"{label} {reward}")
-                    continue
-                if not captcha.is_enabled(self.config):
-                    self._add(messages, f"{nickname}({uid}) 触发验证码，本次跳过")
-                else:
+                if result.get("retcode") != 0:
                     reason = f"{result.get('message')}({result.get('retcode')})"
-                    self._add(messages, f"{nickname}({uid}) 验证码处理后仍失败: {reason}")
-                failed.append(f"{label} 触发验证码")
-                continue
-            reward = describe_award(awards, day_index + 1)
-            self._add(messages, f"{nickname}({uid}) 签到成功，奖励 {reward}")
-            success.append(f"{label} {reward}")
+                    self._add(messages, f"{nickname}({uid}) 签到失败: {reason}")
+                    failed.append(f"{label} {reason}")
+                    continue
+                sign_data = result.get("data") or {}
+                if sign_data.get("success") == 1:
+                    result = self._retry_captcha_sign(messages, game, role, result)
+                    if result.get("retcode") == -5003:
+                        reward = describe_award(awards, day_index)
+                        self._add(messages, f"{nickname}({uid}) 今日已签到，奖励 {reward}")
+                        success.append(f"{label} 已签到 {reward}")
+                        continue
+                    if result.get("retcode") == 0 and (result.get("data") or {}).get("success") != 1:
+                        reward = describe_award(awards, day_index + 1)
+                        self._add(messages, f"{nickname}({uid}) 签到成功，奖励 {reward}")
+                        success.append(f"{label} {reward}")
+                        continue
+                    if not captcha.is_enabled(self.config):
+                        self._add(messages, f"{nickname}({uid}) 触发验证码，本次跳过")
+                    else:
+                        reason = f"{result.get('message')}({result.get('retcode')})"
+                        self._add(messages, f"{nickname}({uid}) 验证码处理后仍失败: {reason}")
+                    failed.append(f"{label} 触发验证码")
+                    continue
+                reward = describe_award(awards, day_index + 1)
+                self._add(messages, f"{nickname}({uid}) 签到成功，奖励 {reward}")
+                success.append(f"{label} {reward}")
+            except Exception as exc:
+                # 单个角色的网络异常只记为失败，不能连累其它角色、游戏和米游币任务
+                reason = f"请求异常: {exc}"
+                self._add(messages, f"{nickname}({uid}) 签到失败: {reason}")
+                failed.append(f"{label} {reason}")
         return {"messages": messages, "success": success, "failed": failed, "skipped": skipped}
 
     def _add(self, messages: list[str], message: str) -> None:

@@ -14,10 +14,10 @@ CUSTOM_DEFAULT_TIMEOUT = 120
 CUSTOM_MAX_ATTEMPTS = 3
 CUSTOM_MAX_WAIT_SECONDS = 60
 CUSTOM_DEFAULT_RETRY_AFTER = 5
-# 限流 / 排队类错误：按 Retry-After 等待后重试
+# 限流 / 排队类错误：服务端还没开始识别，challenge 没被消耗，可以按 Retry-After 等待后原样重试。
+# 50001 / 50000 不在此列：极验的 challenge 用过一次就作废，识别可能已经提交过，
+# 原样重发只会被秒拒 (old challenge)，必须交给调用方重新取一个新验证码。
 CUSTOM_RETRY_WITH_DELAY = {42901, 50301, 50302}
-# 上游或服务内部的瞬时错误：短暂停顿后重试
-CUSTOM_RETRY_IMMEDIATELY = {50001, 50000}
 PROVIDER_LABELS = {
     "damagou": "打码狗",
     "custom": "自定义接口",
@@ -101,7 +101,8 @@ def _solve_damagou(
             params["type"] = captcha_type
         if geetest_success == 0:
             params["success"] = 0
-        data = client.get_json(DAMAGOU_URL, params=params, timeout=float(channel.get("timeout") or 60))
+        # 识别请求不做读超时重试：服务端可能已经开始识别（且按次计费），重发会白等数倍时间
+        data = client.get_json(DAMAGOU_URL, params=params, timeout=float(channel.get("timeout") or 60), retries=0)
         if is_damagou_balance_insufficient(data):
             if emit:
                 emit(DAMAGOU_BALANCE_INSUFFICIENT_MESSAGE)
@@ -138,8 +139,9 @@ def _solve_custom(
         headers = {"X-API-Key": api_key} if api_key else {}
         timeout = float(channel.get("timeout") or CUSTOM_DEFAULT_TIMEOUT)
         for attempt in range(1, CUSTOM_MAX_ATTEMPTS + 1):
+            # 同上：读超时不重试，challenge 用过即作废，交给调用方重新取验证码
             data, response_headers = client.get_json_any_status(
-                url, params=params, headers=headers, timeout=timeout
+                url, params=params, headers=headers, timeout=timeout, retries=0
             )
             code = _response_code(data)
             if code == 0:
@@ -147,14 +149,10 @@ def _solve_custom(
                 if not solution:
                     fail("接口返回成功但缺少 data.validate")
                 return solution
-            if attempt < CUSTOM_MAX_ATTEMPTS:
-                if code in CUSTOM_RETRY_WITH_DELAY:
-                    delay = _retry_after_seconds(response_headers)
-                    if delay <= CUSTOM_MAX_WAIT_SECONDS:
-                        time.sleep(delay)
-                        continue
-                elif code in CUSTOM_RETRY_IMMEDIATELY:
-                    time.sleep(1)
+            if attempt < CUSTOM_MAX_ATTEMPTS and code in CUSTOM_RETRY_WITH_DELAY:
+                delay = _retry_after_seconds(response_headers)
+                if delay <= CUSTOM_MAX_WAIT_SECONDS:
+                    time.sleep(delay)
                     continue
             fail(_format_custom_error(data, code))
             return None
