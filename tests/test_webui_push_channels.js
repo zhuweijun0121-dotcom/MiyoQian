@@ -133,6 +133,25 @@ test("qqbot is offered as its own channel next to the onebot QQ channel", () => 
   assert.ok(options.includes("qq"));
 });
 
+test("every push provider has a button, so each can be tested on its own", () => {
+  const providers = ui.__myqPushChannelOptions.map(([value]) => value).sort();
+  // vm 里的数组原型不同，用 JSON 比较结构
+  assert.equal(
+    JSON.stringify(providers),
+    JSON.stringify([
+      "dingrobot",
+      "email",
+      "feishubot",
+      "pushplus",
+      "qq",
+      "qqbot",
+      "serverchan",
+      "telegram",
+      "wecombot",
+    ]),
+  );
+});
+
 test("the qqbot form exposes AppID, AppSecret and both binding buttons", () => {
   const html = ui.pushChannelFields("qqbot", { provider: "qqbot", enable: true });
   assert.match(html, /AppID/);
@@ -203,4 +222,50 @@ test("a bound OpenID is recognised as configured without other fields", () => {
   assert.equal(ui.hasPushChannelConfig({ provider: "qqbot", user_openid: "u" }), true);
   assert.equal(ui.hasPushChannelConfig({ provider: "qqbot", group_openid: "g" }), true);
   assert.equal(ui.hasPushChannelConfig({ provider: "qqbot", message_format: "text" }), false);
+});
+
+test("the QQ push-type dropdown alone does not count as a configured channel", () => {
+  // 下拉框总有值，只选了推送方式不应该让空通道显示成「已关闭」或通过测试前的参数检查
+  const empty = { provider: "qq", enable: false, msg_type: "group" };
+  assert.equal(ui.hasPushChannelConfig(empty), false);
+  assert.equal(ui.shouldSavePushChannel(empty), false);
+  assert.equal(ui.hasPushChannelConfig({ ...empty, push_url: "http://127.0.0.1:3000" }), true);
+  assert.equal(ui.shouldSavePushChannel({ ...empty, push_url: "http://127.0.0.1:3000" }), true);
+});
+
+test("a backdrop click closes the dialog only when the press started on the backdrop", () => {
+  const handlers = {};
+  const overlay = { addEventListener: (type, fn) => { handlers[type] = fn; } };
+  let closed = 0;
+  ui.closeOnBackdropClick(overlay, () => { closed += 1; });
+  // 在输入框里按下、拖到遮罩上松手：浏览器照样会在遮罩上触发 click
+  handlers.mousedown({ target: {} });
+  handlers.click({ target: overlay });
+  assert.equal(closed, 0);
+  handlers.mousedown({ target: overlay });
+  handlers.click({ target: overlay });
+  assert.equal(closed, 1);
+});
+
+test("unsaved dialog input goes into the draft and never into config", () => {
+  const field = { dataset: { pushField: "app_id" }, type: "text", tagName: "INPUT", value: " 102000000 ", checked: false };
+  const card = {
+    dataset: { pushProvider: "qqbot" },
+    querySelector: (selector) => (selector === "[data-push-field]" ? field : { checked: true }),
+    querySelectorAll: () => [field],
+  };
+  ui.fakeModal = { querySelector: () => card };
+  vm.runInContext(
+    "config = { push: { channels: [] } }; pushModalProvider = 'qqbot'; pushModalEl = fakeModal; pushModalDraft = null;",
+    ui,
+  );
+  try {
+    const draft = ui.captureModalDraft();
+    assert.equal(draft.app_id, "102000000");
+    assert.equal(draft.enable, true);
+    assert.equal(vm.runInContext("pushModalDraft.app_id", ui), "102000000");
+    assert.equal(vm.runInContext("JSON.stringify(config.push.channels)", ui), "[]");
+  } finally {
+    vm.runInContext("config = null; pushModalProvider = null; pushModalEl = null; pushModalDraft = null;", ui);
+  }
 });
