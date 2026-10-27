@@ -37,6 +37,7 @@ BBS_SHARE_URL = f"{BBS_API}/apihub/api/getShareConf"
 BBS_LIKE_URL = f"{BBS_API}/post/api/post/upvote"
 BBS_CREATE_VERIFICATION_URL = f"{BBS_API}/misc/api/createVerification?is_high=true"
 BBS_VERIFY_VERIFICATION_URL = f"{BBS_API}/misc/api/verifyVerification"
+BBS_USER_INFO_URL = f"{BBS_API}/user/api/getUserFullInfo"
 
 MALL_POINT_URL = f"{TAKUMI_API}/common/homutreasure/v1/web/user/point"
 MALL_GOODS_LIST_URL = f"{TAKUMI_API}/mall/v1/web/goods/list"

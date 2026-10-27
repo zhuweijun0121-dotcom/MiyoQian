@@ -12,6 +12,8 @@ import mimetypes
 import pathlib
 import secrets
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +38,7 @@ from ..core.config import (
 )
 from ..core.http import ApiClient
 from ..core.logs import append_log, configure_logger, format_line, print_startup_banner
+from ..core.profile import fetch_avatar_url
 from ..core.qq_bot import bind_openid as bind_qq_openid
 from ..core.qq_bot import generate_verify_code
 from ..tasks.shop_exchange import ShopExchange
@@ -46,8 +49,17 @@ from .scheduler import DailyScheduler
 
 WEB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "webui"
 
+# 标准库的 mimetypes 在部分环境（含 Docker 的 Python 3.11）不认识 .webp，
+# 不注册的话头像会被当成 application/octet-stream 发出去
+mimetypes.add_type("image/webp", ".webp")
+
 # QQ 官方机器人绑定 OpenID 的等待时间，和页面提示保持一致
 QQ_BIND_TIMEOUT = 90
+
+# 账号头像的缓存时间：取到的留一天，没取到的（网络、接口异常）过几分钟再试
+AVATAR_CACHE_SECONDS = 24 * 3600
+AVATAR_RETRY_SECONDS = 300
+AVATAR_MAX_UIDS = 20
 
 # ---------------------------------------------------------------------------
 # 密码认证工具
@@ -97,6 +109,8 @@ class WebApp:
             lambda message: self.log(message, "exchange"),
         )
         self._sessions: dict[str, float] = {}
+        # uid -> (过期时间, 头像地址)，空地址表示这次没取到
+        self._avatar_cache: dict[str, tuple[float, str]] = {}
 
     def _ensure_password_hashed(self) -> None:
         web = self.config.get("web", {})
@@ -271,6 +285,31 @@ class WebApp:
                 self.log(f"配置项变更过多，已省略 {len(visible_changes) - 50} 项", "config")
         else:
             self.log("配置已保存，未检测到配置项变化", "config")
+
+    def account_avatars(self, uids: list[str]) -> dict[str, Any]:
+        """账号在米游社的头像地址。纯展示用，取不到的账号不出现在结果里，页面继续用默认头像。"""
+        uids = list(dict.fromkeys(uid for uid in uids if uid.isascii() and uid.isdigit() and len(uid) <= 20))
+        uids = uids[:AVATAR_MAX_UIDS]
+        now = time.monotonic()
+        with self.lock:
+            cached = {uid: self._avatar_cache[uid] for uid in uids if uid in self._avatar_cache}
+        pending = [uid for uid in uids if uid not in cached or cached[uid][0] <= now]
+        fresh: dict[str, tuple[float, str]] = {}
+        if pending:
+            def lookup(uid: str) -> tuple[str, tuple[float, str]]:
+                try:
+                    return uid, (now + AVATAR_CACHE_SECONDS, fetch_avatar_url(client, uid))
+                except Exception as exc:
+                    self.log(f"账号头像获取失败: {uid}，{exc}", "web")
+                    return uid, (now + AVATAR_RETRY_SECONDS, "")
+
+            # 网络差时单个请求可能要等很久（比如 IPv6 不通要先等超时），并发取免得账号越多越慢
+            with ApiClient(timeout=8.0) as client, ThreadPoolExecutor(max_workers=min(len(pending), 5)) as pool:
+                fresh = dict(pool.map(lookup, pending))
+            with self.lock:
+                self._avatar_cache.update(fresh)
+        known = {**cached, **fresh}
+        return {"avatars": {uid: known[uid][1] for uid in uids if known[uid][1]}}
 
     def shop_goods(self, game: str = "") -> dict[str, Any]:
         game_label = game or "全部分区"
@@ -1124,6 +1163,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/status":
                 self.send_json(self.app.status())
+                return
+            if path == "/api/account/avatars":
+                uids = [uid.strip() for uid in first_query(query, "uids").split(",")]
+                self.send_json(self.app.account_avatars(uids))
                 return
             if path == "/api/shop/goods":
                 self.send_json(self.app.shop_goods(str(first_query(query, "game"))))

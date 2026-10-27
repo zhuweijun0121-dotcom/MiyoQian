@@ -30,6 +30,19 @@ const pushChannelOptions = [
   ["qqbot", "QQ机器人（QQ开放平台）"],
 ];
 
+// 通道图标放在 /assets/push/，文件名和通道 provider 一一对应
+const pushChannelIconFiles = {
+  pushplus: "pushplus.png",
+  serverchan: "serverchan.png",
+  telegram: "telegram.svg",
+  dingrobot: "dingtalk.png",
+  feishubot: "feishu.png",
+  wecombot: "wecom.png",
+  email: "email.svg",
+  qq: "qq.svg",
+  qqbot: "qqbot.svg",
+};
+
 // 供测试断言渠道清单；应用自身不读这个导出
 if (typeof globalThis !== "undefined") {
   globalThis.__myqPushChannelOptions = pushChannelOptions;
@@ -98,6 +111,14 @@ let shopPlanAddressCache = new Map();
 let shopFilterStatus = '';
 let shopCurrentPage = 1;          // 当前页码，从1开始
 const SHOP_PAGE_SIZE = 4;        // 每页显示商品数
+const ACCOUNTS_VISIBLE = 3;      // 账号栏最多同时露出几个账号，其余在列表里滚动
+const PANEL_STATE_KEY = "miyouqian.panels";
+const LOG_PANEL_GAP = 24;        // 日志栏贴着窗口底部时留的边距
+const LOG_PANEL_TOP = 16;        // 同 CSS 里 .side-column 的 sticky top
+let logFitQueued = false;
+const DEFAULT_AVATAR = "/assets/paimon-avatar-192.webp";
+let accountAvatars = {};         // 账号 UID -> 米游社头像地址，取到才有
+const avatarRequested = new Set(); // 已经问过后端的 UID，一次打开页面只问一次
 
 
 const $ = (id) => document.getElementById(id);
@@ -182,7 +203,7 @@ function renderCloudGames() {
     .map(([key, label, disabled, reason]) => {
       const title = reason ? ` title="${escapeAttr(reason)}"` : "";
       return `
-        <label class="chip ${disabled ? "disabled" : ""}"${title}>
+        <label class="choice-toggle ${disabled ? "is-disabled" : ""}"${title}>
           <input type="checkbox" data-cloud-game="${key}" ${enabled.has(key) ? "checked" : ""} ${disabled ? 'data-cloud-game-disabled="1" disabled' : ""} />
           <span>${label}</span>
         </label>
@@ -309,6 +330,13 @@ function pushChannelLabel(provider) {
   return option ? option[1] : provider;
 }
 
+// 图标只是装饰，名字已经写在旁边，所以 alt 留空
+function pushChannelIcon(provider) {
+  const file = pushChannelIconFiles[provider];
+  if (!file) return "";
+  return `<img class="channel-icon" src="/assets/push/${file}" alt="" width="24" height="24" />`;
+}
+
 function pushChannelStateText(channel) {
   if (channel?.enable) return "已启用";
   return hasPushChannelConfig(channel) ? "已关闭" : "未配置";
@@ -322,7 +350,9 @@ function renderPushChannels() {
   $("pushChannels").innerHTML = pushChannelOptions
     .map(([provider, label]) => {
       const channel = byProvider.get(provider);
+      const icon = pushChannelIcon(provider);
       const classes = ["choice-button"];
+      if (icon) classes.push("has-icon");
       if (channel?.enable) {
         classes.push("is-on");
       } else if (hasPushChannelConfig(channel)) {
@@ -330,6 +360,7 @@ function renderPushChannels() {
       }
       return `
         <button class="${classes.join(" ")}" type="button" data-open-push="${provider}" title="配置${escapeAttr(label)}">
+          ${icon}
           <span class="choice-button-name">${escapeHtml(label)}</span>
           <span class="choice-button-state">${pushChannelStateText(channel)}</span>
         </button>
@@ -405,7 +436,7 @@ function openPushChannelModal(provider) {
     <div class="modal-card choice-dialog" data-push-provider="${escapeAttr(provider)}" role="dialog" aria-modal="true" aria-labelledby="pushChannelModalTitle">
       <div class="modal-head">
         <div>
-          <strong id="pushChannelModalTitle">${escapeHtml(label)}</strong>
+          <strong class="channel-title" id="pushChannelModalTitle">${pushChannelIcon(provider)}<span>${escapeHtml(label)}</span></strong>
           <p data-push-modal-state>${pushChannelStateText(channel)}</p>
         </div>
         <button class="ghost icon-only" type="button" data-push-modal-close title="关闭">
@@ -704,7 +735,7 @@ function renderTaskModalBody() {
         <span>启用云游戏签到</span>
       </label>
       <div class="task-group" id="cloudGameTaskGroup">
-        <div class="chips" id="cloudGameChips"></div>
+        <div class="choice-toggles cols-3" id="cloudGameChips"></div>
       </div>
     `;
     renderCloudGames();
@@ -1438,13 +1469,32 @@ function hasCaptchaChannelConfig(channel) {
   return Boolean(String(channel.userkey || "").trim());
 }
 
+// 账号列表有高度上限，展开或编辑的卡片可能被截断，这里把它滚到完整可见
+function revealAccount(index) {
+  const row = document.querySelector(`.account-row[data-index="${index}"]`);
+  const list = row?.closest(".acc-list");
+  if (!list) return;
+  const rowRect = row.getBoundingClientRect();
+  const listRect = list.getBoundingClientRect();
+  const inset = 3; // 与 .acc-list 的内边距一致，别让卡片阴影贴边被裁
+  const above = rowRect.top - listRect.top - inset;
+  const below = rowRect.bottom - listRect.bottom + inset;
+  // 卡片比列表还高时，以顶边为准
+  if (above < 0 || rowRect.height + inset * 2 > listRect.height) list.scrollTop += above;
+  else if (below > 0) list.scrollTop += below;
+}
+
 function renderAccounts() {
   const accounts = config.accounts || [];
   const cards = accounts
     .map((account, index) => accountCard(account, index))
     .join("");
+  // 账号多了只在列表里滚动，「添加账号」放在列表外面，始终固定在底部
+  const scrollable = accounts.length > ACCOUNTS_VISIBLE ? " is-scrollable" : "";
+  // 重绘会重置列表的滚动位置，先记下来，操作某个账号后不要跳回顶部
+  const previousScroll = document.querySelector("#accounts .acc-list")?.scrollTop || 0;
   $("accounts").innerHTML = accounts.length
-    ? `${cards}
+    ? `<div class="acc-list${scrollable}">${cards}</div>
        <button class="acc-add-card" type="button" data-add-account>
          <svg><use href="#i-plus"></use></svg>
          <span>添加账号</span>
@@ -1458,6 +1508,8 @@ function renderAccounts() {
           <span>添加账号</span>
         </button>
       </div>`;
+  const list = document.querySelector("#accounts .acc-list");
+  if (list && previousScroll) list.scrollTop = previousScroll;
 
   document.querySelectorAll("[data-add-account]").forEach((button) => {
     button.addEventListener("click", addAccount);
@@ -1478,6 +1530,7 @@ function renderAccounts() {
         `.account-row[data-index="${editingAccountIndex}"]`,
       );
       row?.querySelector('[data-field="name"]')?.focus();
+      revealAccount(editingAccountIndex);
     });
   });
   document.querySelectorAll("[data-toggle-cloud]").forEach((button) => {
@@ -1490,6 +1543,7 @@ function renderAccounts() {
         expandedCloudAccounts.add(index);
       }
       renderAccounts();
+      revealAccount(index);
     });
   });
   document.querySelectorAll("[data-cancel-account]").forEach((button) => {
@@ -1552,6 +1606,51 @@ function renderAccounts() {
     });
   });
   updateTaskDependencyState();
+  document.querySelectorAll(".acc-avatar.is-remote").forEach(bindAvatarFallback);
+  loadAccountAvatars();
+}
+
+// 米游社头像加载失败（被拦、链接失效）就退回默认头像，下次重绘也不再用这个地址
+function bindAvatarFallback(img) {
+  img.addEventListener(
+    "error",
+    () => {
+      delete accountAvatars[img.dataset.avatarUid];
+      img.classList.remove("is-remote");
+      img.src = DEFAULT_AVATAR;
+    },
+    { once: true },
+  );
+}
+
+// 头像只是装饰：取不到就一直用默认头像，不提示、不重试
+async function loadAccountAvatars() {
+  try {
+    const uids = (config?.accounts || [])
+      .map((account) => String(account.stuid || ""))
+      .filter((uid) => /^\d+$/.test(uid) && !(uid in accountAvatars) && !avatarRequested.has(uid));
+    if (!uids.length) return;
+    uids.forEach((uid) => avatarRequested.add(uid));
+    const data = await api(`/api/account/avatars?uids=${uids.join(",")}`);
+    Object.assign(accountAvatars, data.avatars || {});
+    applyAccountAvatars();
+  } catch {
+    // 保持默认头像
+  }
+}
+
+// 异步取回头像后就地换图，不重绘账号列表，免得打断正在进行的编辑或登录
+function applyAccountAvatars() {
+  (config.accounts || []).forEach((account, index) => {
+    const uid = String(account.stuid || "");
+    const url = accountAvatars[uid];
+    const img = document.querySelector(`.account-row[data-index="${index}"] .acc-avatar`);
+    if (!url || !img || img.classList.contains("is-remote")) return;
+    img.dataset.avatarUid = uid;
+    img.classList.add("is-remote");
+    img.src = url;
+    bindAvatarFallback(img);
+  });
 }
 
 function getFilteredGoods() {
@@ -1569,6 +1668,7 @@ function getFilteredGoods() {
 function accountCard(account, index) {
   const editing = editingAccountIndex === index;
   const loggedIn = Boolean(account.stuid);
+  const avatarUrl = loggedIn ? accountAvatars[String(account.stuid)] || "" : "";
   const cloudCount = accountCloudCount(account);
   const cloudOpen = expandedCloudAccounts.has(index);
   const nameField = editing
@@ -1610,7 +1710,7 @@ function accountCard(account, index) {
   return `
     <article class="account-row acc-card ${editing ? "is-editing" : ""}" data-index="${index}" data-draft="${account._draft ? "1" : "0"}">
       <div class="acc-head">
-        <span class="acc-avatar tone-${accountTone(account)} ${loggedIn ? "" : "is-empty"}">${escapeHtml(accountInitial(account))}</span>
+        <img class="acc-avatar${loggedIn ? "" : " is-empty"}${avatarUrl ? " is-remote" : ""}" src="${escapeAttr(avatarUrl || DEFAULT_AVATAR)}" ${avatarUrl ? `data-avatar-uid="${escapeAttr(account.stuid)}" ` : ""}referrerpolicy="no-referrer" alt="" width="44" height="44" />
         <div class="acc-body">
           <div class="acc-name">
             ${nameField}
@@ -1630,19 +1730,6 @@ function accountCard(account, index) {
       <div class="account-login-slot" data-login-slot="${index}"></div>
     </article>
   `;
-}
-
-function accountInitial(account) {
-  const chars = Array.from(accountLabel(account).trim());
-  return (chars[0] || "?").toUpperCase();
-}
-
-function accountTone(account) {
-  let hash = 0;
-  for (const char of accountLabel(account)) {
-    hash = (hash * 31 + char.codePointAt(0)) % 997;
-  }
-  return (hash % 5) + 1;
 }
 
 function accountCloudCount(account) {
@@ -1940,7 +2027,10 @@ function renderShopPagination(){
       }
       renderShopGoods();
       const listEl = $("shopGoods");
-      if (listEl) listEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (!listEl) return;
+      // 一屏布局下商品列表自己滚动，翻页后回到列表顶部；窄屏下才整页滚动
+      if (getComputedStyle(listEl).overflowY === "auto") listEl.scrollTop = 0;
+      else listEl.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 }
@@ -1996,7 +2086,6 @@ function shopGoodCard(good, index) {
       <div class="shop-good-main">
         <div class="shop-good-title">
           <strong>${escapeHtml(good.goods_name)}</strong>
-          ${soldOut ? "<span>已售罄</span>" : ""}
         </div>
         <div class="shop-good-meta">
           <span>${exchangeLabel} ${escapeHtml(good.exchange_time || "-")}</span>
@@ -3566,6 +3655,7 @@ function addAccount() {
     `.account-row[data-index="${editingAccountIndex}"]`,
   );
   row?.querySelector('[data-field="name"]')?.focus();
+  revealAccount(editingAccountIndex);
 }
 
 function emptyAccount(name) {
@@ -3619,6 +3709,7 @@ function applyDraftLogin(login) {
   renderAccounts();
   const row = document.querySelector(`.account-row[data-index="${index}"]`);
   row?.querySelector('[data-field="name"]')?.focus();
+  revealAccount(index);
 }
 
 function accountLabel(account) {
@@ -3715,6 +3806,63 @@ function switchView(view) {
   if (activeView === "shop" && !shopGoods.length) {
     loadShopGoods().catch((error) => showToast(error.message));
   }
+  scheduleLogFit();
+}
+
+// 左侧各栏的展开状态记在浏览器里；从没记过就保持 HTML 里默认展开的前两栏
+function readPanelState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null");
+    return saved && typeof saved === "object" ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePanelState(panels) {
+  const state = {};
+  panels.forEach((panel) => {
+    state[panel.dataset.panel] = panel.open;
+  });
+  try {
+    localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // 隐私模式等拿不到存储时，只是不记忆
+  }
+}
+
+function initPanelState() {
+  const panels = Array.from(document.querySelectorAll("details.panel[data-panel]"));
+  const saved = readPanelState();
+  panels.forEach((panel) => {
+    const open = saved?.[panel.dataset.panel];
+    if (typeof open === "boolean") panel.open = open;
+    // 每次都按页面上所有栏的当前状态整体写入，恢复时触发的 toggle 也只会写回同样的值
+    panel.addEventListener("toggle", () => savePanelState(panels));
+  });
+}
+
+// 日志栏：页面滚动时贴在可视区右侧，高度补满到窗口底部（窄屏不处理）
+function fitLogPanel() {
+  const side = document.querySelector(".side-column");
+  if (!side) return;
+  if (window.innerWidth <= 860 || side.offsetParent === null) {
+    side.classList.remove("is-fitted");
+    side.style.removeProperty("height");
+    return;
+  }
+  const top = Math.max(side.getBoundingClientRect().top, LOG_PANEL_TOP);
+  side.style.height = `${Math.max(window.innerHeight - top - LOG_PANEL_GAP, 320)}px`;
+  side.classList.add("is-fitted");
+}
+
+function scheduleLogFit() {
+  if (logFitQueued || typeof requestAnimationFrame !== "function") return;
+  logFitQueued = true;
+  requestAnimationFrame(() => {
+    logFitQueued = false;
+    fitLogPanel();
+  });
 }
 function initSelectArrows() {
   // 使用 mousedown 切换旋转状态（比 click 更早触发，且不会干扰下拉展开）
@@ -3828,6 +3976,11 @@ function bindEvents() {
 }
 
 bindEvents();
+initPanelState();
+if (typeof window !== "undefined") {
+  window.addEventListener("scroll", scheduleLogFit, { passive: true });
+  window.addEventListener("resize", scheduleLogFit);
+}
 switchView(activeView);
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,10 @@
   --ok: #1c9a68;
   --warn: #a86d12;
   --danger: #b83b4b;
+  /* 一张收起状态的账号卡片的高度，用来算账号栏「最多露出 3 个」的高度 */
+  --acc-card-h: 138px;
+  /* 所有多选的勾选图标共用这一个，用作 mask，颜色跟随 background / currentColor */
+  --check-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E");
 }
 
 * {
@@ -541,9 +545,6 @@ textarea:focus {
   margin-top: 0;
 }
 
-.chips.compact {
-  margin-top: 0;
-}
 .task-group {
   display: grid;
   gap: 12px;
@@ -763,6 +764,35 @@ textarea:focus {
   background: var(--ok);
 }
 
+/* 通道图标：按钮里放在名字和状态左边，弹窗标题里放在名字前面 */
+.channel-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.choice-button.has-icon {
+  grid-template-columns: 24px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+}
+
+.choice-button.has-icon .channel-icon {
+  grid-row: 1 / span 2;
+}
+
+.choice-button.has-icon .choice-button-name,
+.choice-button.has-icon .choice-button-state {
+  grid-column: 2;
+}
+
+.channel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .push-channel-modal-flags {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -798,24 +828,6 @@ textarea:focus {
   overflow-y: auto;
 }
 
-.task-group.is-disabled .chips,
-.task-group.is-disabled .compact {
-  opacity: 0.48;
-}
-
-.task-group.is-disabled .chip,
-.task-group.is-disabled .compact .check-row {
-  color: var(--muted);
-  background: #f7fafc;
-}
-
-.task-group.is-disabled .chip,
-.task-group.is-disabled .chip input,
-.task-group.is-disabled .compact .check-row,
-.task-group.is-disabled .compact input {
-  cursor: not-allowed;
-}
-
 .section-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -833,67 +845,70 @@ textarea:focus {
   background: var(--panel-soft);
 }
 
-.check-row input {
-  width: 18px;
-  min-height: 18px;
-  accent-color: var(--primary);
+/* 勾选框：去掉系统自带样式，选中后填充主色并显示统一的对勾图标 */
+.check-row input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid #b8cadb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.check-row input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  -webkit-mask: var(--check-icon) center / 14px 14px no-repeat;
+  mask: var(--check-icon) center / 14px 14px no-repeat;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.check-row input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.check-row input[type="checkbox"]:checked {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.check-row input[type="checkbox"]:checked::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.check-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.check-row input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .check-row span {
   color: var(--text);
 }
 
-.check-row.disabled {
+.check-row span small {
+  display: block;
+  margin-top: 2px;
   color: var(--muted);
-  background: #f7fafc;
-  cursor: help;
-}
-
-.check-row.disabled span {
-  color: var(--muted);
-}
-
-.check-row.disabled input {
-  cursor: not-allowed;
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 7px 10px;
-  background: #fff;
-}
-
-.chip input {
-  width: 16px;
-  min-height: 16px;
-  accent-color: var(--primary);
-}
-
-.chip.disabled {
-  color: var(--muted);
-  background: #f7fafc;
-  border-style: dashed;
-  cursor: help;
-}
-
-.chip.disabled span {
-  color: var(--muted);
-}
-
-.chip.disabled input {
-  cursor: not-allowed;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* 多选项做成按钮样子，底层仍是 checkbox；按钮按列等分整行宽度 */
@@ -979,19 +994,34 @@ textarea:focus {
 }
 
 .choice-toggle input:checked + span::before {
-  content: "✓";
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
   margin-right: 6px;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.choice-modal-body .chips {
-  margin-top: 0;
+  background: currentColor;
+  -webkit-mask: var(--check-icon) center / contain no-repeat;
+  mask: var(--check-icon) center / contain no-repeat;
 }
 
 #accounts {
   display: grid;
   gap: 10px;
+}
+
+.acc-list {
+  display: grid;
+  gap: 10px;
+}
+
+/* 超过 3 个账号时只露出 3 个的高度，其余在列表里滚动；
+   留一圈内边距，免得卡片的悬停阴影和编辑态外圈被裁掉 */
+.acc-list.is-scrollable {
+  max-height: calc(var(--acc-card-h) * 3 + 20px + 6px);
+  margin: -3px;
+  padding: 3px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .account-row {
@@ -1025,36 +1055,21 @@ textarea:focus {
 
 .acc-avatar {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
   width: 44px;
   height: 44px;
-  border-radius: 14px;
-  color: #fff;
-  font-size: 17px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #55b0ff, #168df5);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  object-fit: contain;
 }
 
-.acc-avatar.tone-2 {
-  background: linear-gradient(135deg, #a78bfa, #7c5cff);
+/* 米游社头像是方图，裁成圆形；默认的派蒙是带透明边的立绘，保持原样 */
+.acc-avatar.is-remote {
+  border-radius: 50%;
+  object-fit: cover;
 }
 
-.acc-avatar.tone-3 {
-  background: linear-gradient(135deg, #4fd1c5, #0d9488);
-}
-
-.acc-avatar.tone-4 {
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
-}
-
-.acc-avatar.tone-5 {
-  background: linear-gradient(135deg, #fb7185, #e11d48);
-}
-
+/* 未登录：头像变灰变淡，和旁边的「未登录」标签一起提示状态 */
 .acc-avatar.is-empty {
-  background: linear-gradient(135deg, #d7e2ec, #b3c2d1);
+  filter: grayscale(1);
+  opacity: 0.55;
 }
 
 .acc-body {
@@ -1521,6 +1536,26 @@ textarea:focus {
   display: block;
 }
 
+/* 宽屏下由脚本把日志栏的高度补满到窗口底部，日志框跟着撑满 */
+.side-column.is-fitted {
+  display: flex;
+  flex-direction: column;
+}
+
+.side-column.is-fitted .log-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.side-column.is-fitted .logs {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .shop-status {
   margin-bottom: 14px;
 }
@@ -1528,20 +1563,58 @@ textarea:focus {
 .shop-layout {
   display: grid;
   grid-template-columns: minmax(520px, 1fr) minmax(340px, 0.42fr);
-  gap: 14px;
+  gap: 12px;
   align-items: start;
 }
 
 .shop-main,
 .shop-side {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
 }
 
 .shop-side {
   position: sticky;
   top: 16px;
+}
+
+/* 兑换页的面板排得紧一些：标题和内容之间的间距统一由 gap 控制 */
+.shop-main .panel,
+.shop-side .panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.shop-main .panel-head,
+.shop-side .panel-head {
+  margin-bottom: 0;
+}
+
+.shop-side .form-grid.compact {
+  margin-top: 0;
+  gap: 10px;
+}
+
+.shop-side .form-grid input,
+.shop-side .form-grid select,
+.shop-side .readonly-field strong {
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.shop-side .check-row {
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+.shop-main .shop-pagination {
+  flex: none;
+  margin-top: 0;
+  padding: 8px 0 0;
 }
 
 .shop-head,
@@ -1551,7 +1624,7 @@ textarea:focus {
 
 .shop-tools {
   display: flex;
-  gap: 5px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -1560,26 +1633,48 @@ textarea:focus {
   width: min(190px, 100%);
 }
 
+.shop-tools select,
+.shop-tools button {
+  min-height: 34px;
+}
+
+.shop-tools .select-wrapper {
+  flex: none;
+  width: auto;
+}
+
+.shop-filter-game select {
+  width: 150px;
+}
+
+.shop-filter-status select {
+  width: 96px;
+}
+
 .shop-goods,
 .shop-plans {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .shop-good,
 .shop-plan {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
 }
 
 .shop-good {
-  grid-template-columns: 88px minmax(0, 1fr) auto;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.shop-good-actions button {
+  min-height: 34px;
 }
 
 .shop-good.is-sold-out {
@@ -1593,8 +1688,8 @@ textarea:focus {
 .shop-good-image {
   display: grid;
   place-items: center;
-  width: 88px;
-  height: 88px;
+  width: 72px;
+  height: 72px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1614,7 +1709,7 @@ textarea:focus {
 
 .shop-good-main {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1630,7 +1725,6 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.shop-good-title span,
 .shop-good-meta span,
 .shop-plan-foot span {
   color: var(--muted);
@@ -1644,8 +1738,8 @@ textarea:focus {
 }
 
 .shop-good-meta span {
-  min-height: 28px;
-  padding: 4px 8px;
+  min-height: 24px;
+  padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -1673,7 +1767,9 @@ textarea:focus {
   align-items: center;
 }
 
+/* <details> 里收起的内容槽也算一个网格项，gap 会白白在摘要下面多出一截 */
 .shop-plan {
+  gap: 0;
   padding: 0;
   overflow: hidden;
 }
@@ -1683,8 +1779,8 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  min-height: 58px;
-  padding: 12px;
+  min-height: 48px;
+  padding: 8px 12px;
   cursor: pointer;
   list-style: none;
 }
@@ -1748,13 +1844,13 @@ textarea:focus {
 
 .shop-plan-body {
   display: grid;
-  gap: 12px;
-  padding: 0 12px 12px;
+  gap: 10px;
+  padding: 0 12px 10px;
   border-top: 1px solid var(--line);
 }
 
 .shop-plan-body > .shop-plan-head {
-  padding-top: 12px;
+  padding-top: 10px;
 }
 
 .readonly-field {
@@ -1791,7 +1887,7 @@ textarea:focus {
 }
 
 .shop-plan-foot {
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
@@ -1803,6 +1899,83 @@ textarea:focus {
   justify-items: center;
   align-content: center;
   text-align: center;
+}
+
+/* 桌面端兑换页：整页恰好一屏，左右两栏等高，商品列表和计划列表在各自栏内滚动。
+   窗口太窄或太矮时退回自然排版，由整页滚动 */
+@media (min-width: 861px) and (min-height: 560px) {
+  .shell:has(.shop-view:not(.is-hidden)) {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    padding: 16px 0;
+  }
+
+  .shell:has(.shop-view:not(.is-hidden)) .topbar {
+    flex: none;
+    margin-bottom: 12px;
+  }
+
+  .shop-view:not(.is-hidden) {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .shop-view .shop-status {
+    flex: none;
+  }
+
+  .shop-view .shop-layout {
+    flex: 1;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.42fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .shop-view .shop-main,
+  .shop-view .shop-side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* 窗口很矮时右栏整体可滚动，保证兑换计划列表至少有一块可用高度 */
+  .shop-view .shop-side {
+    position: static;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .shop-view .shop-main .panel {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .shop-view .shop-side .panel:last-child {
+    flex: 1;
+    min-height: 240px;
+  }
+
+  .shop-view .shop-side .panel:not(:last-child) {
+    flex: none;
+  }
+
+  .shop-view .shop-goods,
+  .shop-view .shop-plans {
+    flex: 1;
+    min-height: 0;
+    align-content: start;
+    /* 行高按内容算：不然固定高度下 overflow:hidden 的计划卡片会被压扁 */
+    grid-auto-rows: max-content;
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+  }
 }
 
 .modal-overlay {
@@ -1941,12 +2114,12 @@ textarea:focus {
   }
 
   .shop-good {
-    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-columns: 72px minmax(0, 1fr);
   }
 
   .shop-good-image {
-    width: 76px;
-    height: 76px;
+    width: 72px;
+    height: 72px;
   }
 
   .shop-good-actions {
