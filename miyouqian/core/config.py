@@ -294,11 +294,27 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "feishubot": ("webhook", "secret"),
     "wecombot": ("webhook", "plain_text"),
     "email": ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "mail_from", "mail_to", "smtp_ssl"),
+    "gotify": ("server", "token", "priority"),
 }
 
+# 通道字段的默认值：取值等于默认值不算「已配置」。
+# Web 控制台的 app.js 里有一份对应的 pushChannelDefaults，测试会校验两边一致。
 PUSH_CHANNEL_DEFAULTS: dict[str, dict[str, Any]] = {
     "qqbot": {"message_format": "text"},
+    "gotify": {"priority": 5},
 }
+
+
+def normalize_gotify_priority(value: Any) -> int:
+    """Gotify 优先级取 0-10 的整数；空值和非数字用默认值，越界按边界算。
+
+    不能用 `value or 默认值`：0 是合法的最低优先级，会被当成空值吞掉。
+    """
+    try:
+        priority = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return PUSH_CHANNEL_DEFAULTS["gotify"]["priority"]
+    return max(0, min(10, priority))
 
 
 def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
@@ -312,6 +328,7 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
         "email",
         "qq",
         "qqbot",
+        "gotify",
     }
     raw_channels = push.get("channels")
     if not isinstance(raw_channels, list):
@@ -340,6 +357,8 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
                 channel[field] = parse_bool(raw.get(field, False))
             elif field == "message_format":
                 channel[field] = "markdown" if str(raw.get(field) or "").strip().lower() == "markdown" else "text"
+            elif field == "priority":
+                channel[field] = normalize_gotify_priority(raw.get(field))
             else:
                 channel[field] = str(raw.get(field) or defaults.get(field, ""))
         if should_keep_push_channel(channel):
@@ -351,6 +370,7 @@ def should_keep_push_channel(channel: dict[str, Any]) -> bool:
     if channel.get("enable"):
         return True
     provider = str(channel.get("provider") or "")
+    defaults = PUSH_CHANNEL_DEFAULTS.get(provider, {})
     for field in PUSH_CHANNEL_FIELDS.get(provider, ()):
         if field == "smtp_ssl":
             continue
@@ -362,9 +382,10 @@ def should_keep_push_channel(channel: dict[str, Any]) -> bool:
             if int(channel.get(field) or 465) != 465:
                 return True
             continue
-        # 只有非默认取值才算「已配置」，避免默认的 message_format=text 让空通道一直被保留
-        if field in PUSH_CHANNEL_DEFAULTS.get(provider, {}):
-            if str(channel.get(field) or "") != str(PUSH_CHANNEL_DEFAULTS[provider][field]):
+        # 只有非默认取值才算「已配置」，避免默认的 message_format=text、priority=5 让空通道一直被保留
+        if field in defaults:
+            value = channel.get(field)
+            if value not in (None, "") and str(value) != str(defaults[field]):
                 return True
             continue
         if str(channel.get(field) or "").strip():

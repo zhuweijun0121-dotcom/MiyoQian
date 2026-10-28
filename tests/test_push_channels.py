@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import json
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -82,6 +83,146 @@ class ServerChanSendTest(unittest.TestCase):
         self.assertIn("403", str(ctx.exception))
         self.assertIsNone(ctx.exception.__cause__)
         self.assertTrue(ctx.exception.__suppress_context__)
+
+
+class GotifySendTest(unittest.TestCase):
+    """用 MockTransport 走真实的 httpx 请求，才能验证请求头、错误文本和重定向行为。"""
+
+    def _client(self, handler):
+        requests = []
+
+        def record(request):
+            requests.append(request)
+            return handler(request)
+
+        # 和生产里的公共 client 一样开着 follow_redirects，send_gotify 得自己把它关掉
+        client = httpx.Client(transport=httpx.MockTransport(record), follow_redirects=True)
+        self.addCleanup(client.close)
+        return client, requests
+
+    def test_sends_markdown_content_type_and_priority(self):
+        client, requests = self._client(lambda request: httpx.Response(200, json={}))
+        notifier.send_gotify(
+            client,
+            {"server": "http://gotify.example.com/", "token": "abc", "priority": 8},
+            "标题",
+            "# 正文",
+        )
+        (request,) = requests
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(str(request.url), "http://gotify.example.com/message")
+        self.assertEqual(request.headers["X-Gotify-Key"], "abc")
+        self.assertEqual(
+            json.loads(request.content),
+            {
+                "title": "标题",
+                "message": "# 正文",
+                "priority": 8,
+                "extras": {"client::display": {"contentType": "text/markdown"}},
+            },
+        )
+
+    def test_priority_zero_is_sent_as_zero(self):
+        client, requests = self._client(lambda request: httpx.Response(200, json={}))
+        notifier.send_gotify(client, {"server": "http://g.example.com", "token": "t", "priority": 0}, "标题", "正文")
+        self.assertEqual(json.loads(requests[0].content)["priority"], 0)
+
+    def test_missing_priority_defaults_to_five(self):
+        client, requests = self._client(lambda request: httpx.Response(200, json={}))
+        notifier.send_gotify(client, {"server": "http://g.example.com", "token": "t"}, "标题", "正文")
+        self.assertEqual(json.loads(requests[0].content)["priority"], 5)
+
+    def test_missing_server_or_token_is_rejected(self):
+        client, requests = self._client(lambda request: httpx.Response(200, json={}))
+        for push in ({"token": "t"}, {"server": "http://g.example.com"}):
+            with self.subTest(push=push):
+                with self.assertRaises(ValueError):
+                    notifier.send_gotify(client, push, "标题", "正文")
+        self.assertEqual(requests, [])
+
+    def test_http_error_does_not_leak_token(self):
+        # httpx 的 HTTPStatusError 文本带完整 URL；token 在请求头里，错误里不该再出现任何凭据
+        client, _ = self._client(lambda request: httpx.Response(401, json={"error": "Unauthorized"}))
+        push = {"server": "http://user:PASSWORD@gotify.example.com", "token": "SECRETTOKEN"}
+        with self.assertRaises(ValueError) as ctx:
+            notifier.send_gotify(client, push, "标题", "正文")
+        message = str(ctx.exception)
+        self.assertNotIn("SECRETTOKEN", message)
+        self.assertNotIn("PASSWORD", message)
+        self.assertIn("401", message)
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertTrue(ctx.exception.__suppress_context__)
+
+    def test_redirect_is_reported_instead_of_followed(self):
+        # 跟随 301/302 会把 POST 变成不带正文的 GET，还会把请求头里的 token 发给跳转后的主机
+        client, requests = self._client(
+            lambda request: httpx.Response(301, headers={"Location": "https://gotify.example.com/message"})
+        )
+        with self.assertRaises(ValueError) as ctx:
+            notifier.send_gotify(client, {"server": "http://gotify.example.com", "token": "t"}, "标题", "正文")
+        self.assertIn("重定向", str(ctx.exception))
+        self.assertEqual(len(requests), 1)
+
+
+class GotifyRoutingTest(unittest.TestCase):
+    def setUp(self):
+        self.send = self.enterContext(patch.object(notifier, "send_gotify"))
+        self.client = Mock()
+        self.channel = {"server": "http://g.example.com", "token": "t"}
+
+    def test_task_push_uses_gotify(self):
+        notifier._send(self.client, "gotify", self.channel, "标题", "日志", True)
+        self.send.assert_called_once_with(
+            self.client, self.channel, "标题", notifier.build_push_markdown("标题", "日志", True),
+        )
+
+    def test_exchange_push_uses_gotify(self):
+        with patch.object(notifier, "build_exchange_markdown", return_value="**兑换**"):
+            notifier._send_exchange(self.client, "gotify", self.channel, "标题", "商品", {}, {}, True)
+        self.send.assert_called_once_with(self.client, self.channel, "标题", "**兑换**")
+
+
+class GotifyConfigTest(unittest.TestCase):
+    def _channel(self, **fields):
+        channels = normalize_push_channels(
+            {"channels": [dict(provider="gotify", enable=True, server="https://g.example.com", token="t", **fields)]}
+        )
+        return channels[0]
+
+    def test_priority_is_normalized_to_an_int_between_zero_and_ten(self):
+        cases = [
+            (0, 0), ("0", 0), (8, 8), ("8", 8), (10, 10), (5.0, 5), ("5.0", 5),
+            (99, 10), (-3, 0), ("", 5), (None, 5), ("high", 5), (float("nan"), 5), (float("inf"), 5),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(self._channel(priority=raw)["priority"], expected)
+
+    def test_missing_priority_defaults_to_five(self):
+        self.assertEqual(self._channel()["priority"], 5)
+
+    def test_default_priority_alone_does_not_keep_an_empty_disabled_channel(self):
+        for priority in (5, "5", None, "", "high"):
+            with self.subTest(priority=priority):
+                channels = normalize_push_channels(
+                    {"channels": [{"provider": "gotify", "enable": False, "priority": priority}]}
+                )
+                self.assertEqual(channels, [])
+
+    def test_non_default_priority_counts_as_configured(self):
+        # 和 qqbot 的 message_format=markdown 一样：偏离默认值说明用户动过它，包括最低的 0
+        for priority in (0, 8, 10):
+            with self.subTest(priority=priority):
+                channels = normalize_push_channels(
+                    {"channels": [{"provider": "gotify", "enable": False, "priority": priority}]}
+                )
+                self.assertEqual([channel["priority"] for channel in channels], [priority])
+
+    def test_server_alone_keeps_a_disabled_channel(self):
+        channels = normalize_push_channels(
+            {"channels": [{"provider": "gotify", "enable": False, "server": "https://g.example.com"}]}
+        )
+        self.assertEqual([channel["provider"] for channel in channels], ["gotify"])
 
 
 class ServerChanRoutingTest(unittest.TestCase):
@@ -413,7 +554,7 @@ class WebPushTestEndpointTest(unittest.TestCase):
 
 
 class WebPushTestAllProvidersTest(unittest.TestCase):
-    """9 个推送方式都能单独测试：每个只触发自己那一次发送。"""
+    """10 个推送方式都能单独测试：每个只触发自己那一次发送。"""
 
     SAMPLES = {
         "pushplus": {"token": "token"},
@@ -435,6 +576,7 @@ class WebPushTestAllProvidersTest(unittest.TestCase):
             "msg_type": "private",
         },
         "qqbot": {"app_id": "102000000", "client_secret": "secret", "user_openid": "openid"},
+        "gotify": {"server": "http://gotify.example.invalid", "token": "abc", "priority": 8},
     }
 
     def test_every_provider_is_sent_alone(self):

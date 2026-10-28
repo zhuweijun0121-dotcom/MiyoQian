@@ -106,6 +106,12 @@ push:
       group_openid: ""
       message_format: text   # text 或 markdown
       api_base: ""           # 留空使用 https://api.bot.qq.com，沙箱填 https://sandbox.api.sgroup.qq.com
+    # Gotify（自托管通知服务）
+    - provider: gotify
+      enable: false
+      server: ""          # 服务器地址，形如 https://gotify.example.com，不含 /message 路径
+      token: ""           # App Token
+      priority: 5         # 优先级 0-10，默认 5
 
 shop_exchange:
   enable: true

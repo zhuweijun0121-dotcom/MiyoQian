@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -142,6 +143,7 @@ test("every push provider has a button, so each can be tested on its own", () =>
       "dingrobot",
       "email",
       "feishubot",
+      "gotify",
       "pushplus",
       "qq",
       "qqbot",
@@ -231,6 +233,63 @@ test("the QQ push-type dropdown alone does not count as a configured channel", (
   assert.equal(ui.shouldSavePushChannel(empty), false);
   assert.equal(ui.hasPushChannelConfig({ ...empty, push_url: "http://127.0.0.1:3000" }), true);
   assert.equal(ui.shouldSavePushChannel({ ...empty, push_url: "http://127.0.0.1:3000" }), true);
+});
+
+test("gotify priority 0 survives rendering, saving and reloading instead of falling back to 5", () => {
+  const channel = { provider: "gotify", enable: true, server: "https://g.example.com", token: "t", priority: 0 };
+  const html = ui.pushChannelFields("gotify", channel);
+  assert.match(html, /data-push-field="priority"[^>]*value="0"/);
+  const saved = collectProvider("gotify", html);
+  assert.equal(saved.priority, "0");
+  // 后续无关保存走隐藏字段，数字 0 也不能被当成空值丢掉
+  assert.equal(collectProvider("gotify", ui.pushChannelHiddenFields(channel)).priority, "0");
+  assert.equal(ui.cleanPushChannel(channel).priority, "0");
+});
+
+test("gotify priority input is bounded to 0-10 and defaults to 5", () => {
+  const html = ui.pushChannelFields("gotify", { provider: "gotify", enable: true });
+  assert.match(html, /data-push-field="priority"[^>]*value="5"[^>]*min="0" max="10" step="1"/);
+  assert.equal(collectProvider("gotify", html).priority, "5");
+});
+
+test("the gotify priority default alone does not retain an empty channel", () => {
+  const empty = collectProvider("gotify", ui.pushChannelFields("gotify", ui.emptyPushChannel("gotify")), false);
+  assert.equal(empty.priority, "5");
+  assert.equal(ui.shouldSavePushChannel(empty), false);
+  assert.equal(ui.hasPushChannelConfig(empty), false);
+  assert.equal(ui.shouldSavePushChannel({ ...empty, server: "https://g.example.com" }), true);
+  // 留空等于没填，同样补成默认值
+  assert.equal(ui.cleanPushChannel({ ...empty, priority: "" }).priority, "5");
+});
+
+test("a non-default gotify priority counts as configured, like the backend", () => {
+  const empty = collectProvider("gotify", ui.pushChannelFields("gotify", ui.emptyPushChannel("gotify")), false);
+  for (const priority of ["0", "8", 0, 8]) {
+    assert.equal(ui.shouldSavePushChannel({ ...empty, priority }), true, String(priority));
+    assert.equal(ui.hasPushChannelConfig({ ...empty, priority }), true, String(priority));
+  }
+});
+
+test("channel defaults match the backend's PUSH_CHANNEL_DEFAULTS", (t) => {
+  const root = path.join(__dirname, "..");
+  const run = spawnSync(
+    process.env.PYTHON || "python",
+    ["-c", "import json; from miyouqian.core.config import PUSH_CHANNEL_DEFAULTS as d; print(json.dumps(d))"],
+    { cwd: root, env: { ...process.env, PYTHONPATH: root }, encoding: "utf8" },
+  );
+  if (run.error || run.status !== 0) {
+    t.skip(`python is not available to read the backend defaults: ${run.error?.message || run.stderr}`);
+    return;
+  }
+  const backend = JSON.parse(run.stdout);
+  // 前端统一用字符串；vm 里的对象原型不同，用 JSON 比较结构
+  const stringified = Object.fromEntries(
+    Object.entries(backend).map(([provider, fields]) => [
+      provider,
+      Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, String(value)])),
+    ]),
+  );
+  assert.equal(JSON.stringify(ui.__myqPushChannelDefaults), JSON.stringify(stringified));
 });
 
 test("a backdrop click closes the dialog only when the press started on the backdrop", () => {
