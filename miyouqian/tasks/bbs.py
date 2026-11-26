@@ -11,6 +11,7 @@ from typing import Any, Callable
 from .. import constants as c
 from ..auth.login import refresh_cookie_token
 from ..core import captcha, cookies, crypto
+from ..core import device as devicelib
 from ..core.http import ApiClient
 
 
@@ -50,9 +51,17 @@ class BbsTasks:
         task_flags = self._task_flags(state)
         possible_today = received + can_get
         self._add(messages, f"米游币今日进度：已获得 {received}，还可获得 {can_get}，预计总共可获得 {possible_today}")
+        # 没勾选的任务记为跳过；账号没有某个任务时照常执行，只是不加米游币，不算失败
+        for key, flag, name in (("checkin", "sign", "社区签到"), ("read", "read", "看帖任务"), ("like", "like", "点赞任务"), ("share", "share", "分享任务")):
+            if not self.bbs_config.get(key, True):
+                skipped.append(f"{name}未开启")
+                self._add(messages, f"{name}未开启，跳过")
+            elif task_flags[flag]:
+                skipped.append(f"{name}已完成")
+                self._add(messages, f"{name}已完成，跳过")
         if can_get == 0:
             self._add(messages, f"今日任务已完成，今日已得 {received}，当前总计 {total}")
-            self._add(messages, f"米游币任务汇总：成功 0，失败 0，跳过 0，今日总共可获得 {possible_today}，实际已获得 {received}，本次新增 0")
+            self._add(messages, f"米游币任务汇总：成功 0，失败 0，跳过 {len(skipped)}，今日总共可获得 {possible_today}，实际已获得 {received}，本次新增 0")
             return messages
         if self.bbs_config.get("checkin", True) and not task_flags["sign"]:
             result = self._community_sign()
@@ -60,17 +69,14 @@ class BbsTasks:
             success.extend(result["success"])
             failed.extend(result["failed"])
             self._sleep()
-        elif task_flags["sign"]:
-            skipped.append("社区签到已完成")
-            self._add(messages, "社区签到已完成，跳过")
         interaction_plan = [
-            ("read", "read_num", "看帖", self._read),
-            ("like", "like_num", "点赞", self._like),
-            ("share", None, "分享", self._share),
+            ("read", "read_num", self._read),
+            ("like", "like_num", self._like),
+            ("share", None, self._share),
         ]
         needs_posts = any(
             self.bbs_config.get(flag, True) and not task_flags[flag]
-            for flag, _, _, _ in interaction_plan
+            for flag, _, _ in interaction_plan
         )
         if needs_posts:
             self._add(messages, "正在获取帖子列表")
@@ -80,24 +86,16 @@ class BbsTasks:
                 self._add(messages, f"帖子列表请求异常: {exc}")
                 posts = []
             if posts:
-                for flag, num_key, label, action in interaction_plan:
+                for flag, num_key, action in interaction_plan:
                     if self.bbs_config.get(flag, True) and not task_flags[flag]:
                         limit = task_flags[num_key] if num_key else 1
                         result = action(posts[:limit])
                         messages.extend(result["messages"])
                         success.extend(result["success"])
                         failed.extend(result["failed"])
-                    elif self.bbs_config.get(flag, True) and task_flags[flag]:
-                        skipped.append(f"{label}已完成")
-                        self._add(messages, f"{label}任务已完成，跳过")
             else:
                 failed.append("获取帖子列表失败")
                 self._add(messages, "获取帖子列表失败，无法执行看帖/点赞/分享")
-        else:
-            for flag, _, label, _ in interaction_plan:
-                if self.bbs_config.get(flag, True) and task_flags[flag]:
-                    skipped.append(f"{label}已完成")
-                    self._add(messages, f"{label}任务已完成，跳过")
         try:
             state = self._task_state() or state
         except Exception as exc:
@@ -131,11 +129,11 @@ class BbsTasks:
             "cookie": cookies.stoken_cookie(self.account),
             "x-rpc-client_type": "2",
             "x-rpc-app_version": c.BBS_VERSION,
-            "x-rpc-sys_version": "12",
+            "x-rpc-sys_version": devicelib.sys_version(self.device),
             "x-rpc-channel": "miyousheluodi",
             "x-rpc-device_id": str(self.device["id"]),
-            "x-rpc-device_name": str(self.device.get("name") or "Xiaomi MI 6"),
-            "x-rpc-device_model": str(self.device.get("model") or "Mi 6"),
+            "x-rpc-device_name": devicelib.device_name(self.device),
+            "x-rpc-device_model": devicelib.device_model(self.device),
             "x-rpc-h265_supported": "1",
             "Referer": "https://app.mihoyo.com",
             "Content-Type": "application/json; charset=UTF-8",
@@ -144,15 +142,17 @@ class BbsTasks:
             "x-rpc-csm_source": "home",
             "User-Agent": "okhttp/4.9.3",
         }
-        if self.device.get("fp"):
-            headers["x-rpc-device_fp"] = str(self.device["fp"])
+        # 没有可用的 fp 就不带这个头，不拿随机串顶替
+        device_fp = devicelib.effective_fp(self.device)
+        if device_fp:
+            headers["x-rpc-device_fp"] = device_fp
         return headers
 
     def _web_headers(self) -> dict[str, str]:
         return {
             "Accept": "application/json, text/plain, */*",
             "Origin": "https://webstatic.mihoyo.com",
-            "User-Agent": c.DEFAULT_MOBILE_UA,
+            "User-Agent": devicelib.mobile_ua(self.device),
             "Referer": "https://webstatic.mihoyo.com",
             "Accept-Language": "zh-CN,en-US;q=0.8",
             "X-Requested-With": "com.mihoyo.hyperion",
@@ -166,7 +166,7 @@ class BbsTasks:
             headers=self._web_headers(),
         )
         if data.get("retcode") == -100 and not retried:
-            if refresh_cookie_token(self.client, self.account):
+            if refresh_cookie_token(self.client, self.account, self.device):
                 return self._task_state(retried=True)
         return data.get("data", {}) if data.get("retcode") == 0 else {}
 
@@ -360,7 +360,7 @@ class BbsTasks:
                 data = self.client.get_json(
                     c.BBS_SHARE_URL,
                     params={"entity_id": post_id, "entity_type": 1},
-                    headers=self._web_headers(),
+                    headers=self._headers(),
                 )
                 if data.get("message") == "OK":
                     self._add(messages, f"分享成功: {title}")

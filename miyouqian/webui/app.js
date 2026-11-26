@@ -29,6 +29,7 @@ const pushChannelOptions = [
   ["qq", "QQ推送"],
   ["qqbot", "QQ机器人（QQ开放平台）"],
   ["gotify", "Gotify"],
+  ["meow", "MeoW"],
 ];
 
 // 通道图标放在 /assets/push/，文件名和通道 provider 一一对应
@@ -43,12 +44,14 @@ const pushChannelIconFiles = {
   qq: "qq.svg",
   qqbot: "qqbot.svg",
   gotify: "gotify.png",
+  meow: "meow.png",
 };
 
 // 通道字段的默认值：取值等于默认值不算「已配置」。
 // 和后端 config.py 的 PUSH_CHANNEL_DEFAULTS 一一对应（这里的值统一是字符串），测试会校验两边一致
 const pushChannelDefaults = {
   qqbot: { message_format: "text" },
+  qq: { protocol: "nap" },
   gotify: { priority: "5" },
 };
 
@@ -84,8 +87,6 @@ const bbsForumOptions = [
   ["9", "崩坏：因缘精灵"]
 ];
 const defaultBbsForums = ["5", "2"];
-const bbsInteractionDisabledReason =
-    "米游社改版，社区互动已无法获取米游币，待新获取方式更新~";
 
 // 任务配置里的三个模块，和推送通道一样用按钮 + 弹窗
 const taskModules = [
@@ -116,19 +117,6 @@ let qqBindRestored = false;
 let editingCaptchaProviders = new Set();
 let logsPinnedToBottom = true;
 let activeView = "dashboard";
-let shopRunningProgress = {};
-let shopGoods = [];
-let shopGames = [{ key: "", name: "全部分区" }];
-let shopSelectedGame = "";
-let shopOpenPlans = new Set();
-let shopRequestInFlight = false;
-let shopGoodsLoading = false;
-let shopGoodsLoadSeq = 0;
-let shopExchangeNowGoodsId = "";
-let shopPlanAddressCache = new Map();
-let shopFilterStatus = '';
-let shopCurrentPage = 1;          // 当前页码，从1开始
-const SHOP_PAGE_SIZE = 4;        // 每页显示商品数
 const ACCOUNTS_VISIBLE = 3;      // 账号栏最多同时露出几个账号，其余在列表里滚动
 const PANEL_STATE_KEY = "miyouqian.panels";
 const LOG_PANEL_GAP = 24;        // 日志栏贴着窗口底部时留的边距
@@ -137,6 +125,10 @@ let logFitQueued = false;
 const DEFAULT_AVATAR = "/assets/paimon-avatar-192.webp";
 let accountAvatars = {};         // 账号 UID -> 米游社头像地址，取到才有
 const avatarRequested = new Set(); // 已经问过后端的 UID，一次打开页面只问一次
+let deviceInfo = null;           // GET /api/device 的结果，没取到是 null
+let deviceError = "";            // 读取设备信息失败的原因
+let deviceBusy = "";             // 正在进行的操作（fp / import / reset），空表示空闲
+let deviceImportDraft = "";      // 导入框里还没提交的文字，面板重绘时保留
 
 
 const $ = (id) => document.getElementById(id);
@@ -163,7 +155,7 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), Math.min(15000, Math.max(2600, String(message).length * 90)));
 }
 
 async function loadConfig() {
@@ -172,8 +164,10 @@ async function loadConfig() {
     ...account,
     _draft: false,
   }));
+  shopMetaCache.clear();
   renderConfig();
   loadAllPlanAddresses();
+  loadDevice();
 }
 
 function renderConfig() {
@@ -255,7 +249,6 @@ function updateTaskDependencyState() {
   const gameToggle = $("gameCheckin");
   const cloudToggle = $("cloudGameCheckin");
   const bbsToggle = $("bbsTasks");
-  const bbsCheckin = $("bbsCheckin");
 
   if (gameToggle) {
     setTaskGroupDisabled("gameTaskGroup", "[data-game]", !gameToggle.checked);
@@ -268,12 +261,14 @@ function updateTaskDependencyState() {
     );
   }
   if (bbsToggle) {
-    setTaskGroupDisabled("bbsTaskGroup", "#bbsCheckin", !bbsToggle.checked);
-  }
-  if (bbsToggle && bbsCheckin) {
-    const forumsEnabled = bbsToggle.checked && bbsCheckin.checked;
-    $("bbsForumChips")?.classList.toggle("is-hidden", !forumsEnabled);
-    setTaskGroupDisabled("bbsTaskGroup", "[data-bbs-forum]", !forumsEnabled);
+    setTaskGroupDisabled(
+      "bbsTaskGroup",
+      "#bbsCheckin, #bbsRead, #bbsLike, #bbsShare",
+      !bbsToggle.checked,
+    );
+    // 看帖 / 点赞 / 分享也要用版块列表，所以只要米游币任务开着就显示
+    $("bbsForumChips")?.classList.toggle("is-hidden", !bbsToggle.checked);
+    setTaskGroupDisabled("bbsTaskGroup", "[data-bbs-forum]", !bbsToggle.checked);
   }
 
   updateAccountCloudGameInputs();
@@ -659,15 +654,6 @@ async function savePushChannel() {
 // ---------------------------------------------------------------------------
 // 任务配置弹窗：游戏社区签到 / 云游戏签到 / 米游币任务
 // ---------------------------------------------------------------------------
-function bbsInteractionToggle(label) {
-  return `
-    <label class="choice-toggle is-disabled" title="${escapeAttr(bbsInteractionDisabledReason)}">
-      <input type="checkbox" disabled />
-      <span>${label}</span>
-    </label>
-  `;
-}
-
 function openTaskModal(kind) {
   if (!kind) return;
   if (taskModalEl) closeTaskModal();
@@ -742,6 +728,7 @@ function renderTaskModalBody() {
       <div class="task-group" id="gameTaskGroup">
         <div class="choice-toggles cols-3" id="gameChips"></div>
       </div>
+      <p class="task-note">国服和国际服账号共用这份游戏列表；国际服没有的游戏（如崩坏学园2）会自动跳过。</p>
     `;
     renderGames();
     return;
@@ -755,6 +742,7 @@ function renderTaskModalBody() {
       <div class="task-group" id="cloudGameTaskGroup">
         <div class="choice-toggles cols-3" id="cloudGameChips"></div>
       </div>
+      <p class="task-note">仅对国服账号生效，国际服账号会自动跳过。</p>
     `;
     renderCloudGames();
     return;
@@ -770,12 +758,22 @@ function renderTaskModalBody() {
           <input id="bbsCheckin" type="checkbox" ${config.bbs?.checkin !== false ? "checked" : ""} />
           <span>社区签到</span>
         </label>
-        ${bbsInteractionToggle("点赞")}
-        ${bbsInteractionToggle("看帖")}
-        ${bbsInteractionToggle("分享")}
+        <label class="choice-toggle">
+          <input id="bbsRead" type="checkbox" ${config.bbs?.read ? "checked" : ""} />
+          <span>看帖</span>
+        </label>
+        <label class="choice-toggle">
+          <input id="bbsLike" type="checkbox" ${config.bbs?.like ? "checked" : ""} />
+          <span>点赞</span>
+        </label>
+        <label class="choice-toggle">
+          <input id="bbsShare" type="checkbox" ${config.bbs?.share ? "checked" : ""} />
+          <span>分享</span>
+        </label>
       </div>
       <div class="choice-toggles cols-3" id="bbsForumChips"></div>
     </div>
+    <p class="task-note">仅对国服账号生效，国际服账号会自动跳过。</p>
   `;
   renderBbsForums();
 }
@@ -815,13 +813,13 @@ async function saveTaskModal() {
   } else {
     config.features.bbs_tasks = Boolean($("bbsTasks")?.checked);
     config.bbs.checkin = Boolean($("bbsCheckin")?.checked);
+    config.bbs.read = Boolean($("bbsRead")?.checked);
+    config.bbs.like = Boolean($("bbsLike")?.checked);
+    config.bbs.share = Boolean($("bbsShare")?.checked);
     config.bbs.forums = checkedInputValues(
       "[data-bbs-forum]",
       (input) => Number(input.dataset.bbsForum),
     );
-    config.bbs.read = false;
-    config.bbs.like = false;
-    config.bbs.share = false;
   }
   try {
     await autoSaveConfig();
@@ -853,6 +851,7 @@ function pushChannelFields(provider, channel) {
     access_token: channel.access_token || "",
     send_id: channel.send_id || "",
     msg_type: channel.msg_type || "",
+    protocol: channel.protocol || pushChannelDefaults.qq.protocol,
     app_id: channel.app_id || "",
     client_secret: channel.client_secret || "",
     user_openid: channel.user_openid || "",
@@ -869,6 +868,7 @@ function pushChannelFields(provider, channel) {
     server: channel.server || "",
     // 0 是合法的最低优先级，不能用 || 回退到默认值
     priority: String(channel.priority ?? "").trim() || pushChannelDefaults.gotify.priority,
+    nickname: channel.nickname || "",
   };
   const field = (name, label, type = "text", attrs = "") => `
     <label>
@@ -920,7 +920,8 @@ function pushChannelFields(provider, channel) {
       field("push_url", "HTTP API", "text"),
       field("access_token", "Access Token", "text"),
       field("send_id", "Group ID / User ID", "text"),
-      selectBox("msg_type", "推送方式", { group: "QQ群", private: "私信" })
+      selectBox("msg_type", "推送目标", { group: "QQ群", private: "私信" }),
+      selectBox("protocol", "框架协议（请根据后端机器人框架选择）", { nap: "Napcat", sl: "SnowLuma" }),
     ],
     qqbot: [
       field("app_id", "AppID"),
@@ -965,6 +966,9 @@ function pushChannelFields(provider, channel) {
       field("server", "服务器地址"),
       field("token", "App Token", "password"),
       field("priority", "优先级（0-10，默认 5）", "number", 'min="0" max="10" step="1"'),
+    ],
+    meow: [
+      field("nickname", "昵称（MeoW App 里的推送昵称）"),
     ],
   };
 
@@ -1147,7 +1151,7 @@ function pushChannelFieldNames(provider) {
   const fields = {
     pushplus: ["token", "topic"],
     serverchan: ["sendkey", "uid"],
-    qq: ["push_url", "access_token", "send_id", "msg_type"],
+    qq: ["push_url", "access_token", "send_id", "msg_type", "protocol"],
     qqbot: ["app_id", "client_secret", "user_openid", "group_openid", "message_format", "api_base"],
     telegram: ["token", "chat_id", "api_url"],
     dingrobot: ["webhook", "secret"],
@@ -1163,6 +1167,7 @@ function pushChannelFieldNames(provider) {
       "smtp_ssl",
     ],
     gotify: ["server", "token", "priority"],
+    meow: ["nickname"],
   };
   return fields[provider] || [];
 }
@@ -1527,7 +1532,7 @@ function renderAccounts() {
     : `<div class="acc-empty">
         <svg><use href="#i-user"></use></svg>
         <strong>还没有账号</strong>
-        <span>添加后可以选择扫码或验证码登录</span>
+        <span>国服可扫码或验证码登录，国际服粘贴 HoYoLAB cookie</span>
         <button class="primary" type="button" data-add-account>
           <svg><use href="#i-plus"></use></svg>
           <span>添加账号</span>
@@ -1544,6 +1549,13 @@ function renderAccounts() {
       showLoginMethods(Number(button.dataset.login)).catch((error) =>
         showToast(error.message),
       );
+    });
+  });
+  document.querySelectorAll("[data-region-select]").forEach((select) => {
+    // 换服务器会改变这张卡片上的按钮和提示，先把已填的内容收回来再重画
+    select.addEventListener("change", () => {
+      collectConfig();
+      renderAccounts();
     });
   });
   document.querySelectorAll("[data-edit-account]").forEach((button) => {
@@ -1651,12 +1663,13 @@ function bindAvatarFallback(img) {
 // 头像只是装饰：取不到就一直用默认头像，不提示、不重试
 async function loadAccountAvatars() {
   try {
-    const uids = (config?.accounts || [])
-      .map((account) => String(account.stuid || ""))
-      .filter((uid) => /^\d+$/.test(uid) && !(uid in accountAvatars) && !avatarRequested.has(uid));
-    if (!uids.length) return;
-    uids.forEach((uid) => avatarRequested.add(uid));
-    const data = await api(`/api/account/avatars?uids=${uids.join(",")}`);
+    const keys = (config?.accounts || [])
+      .filter((account) => account.stuid)
+      .map(avatarKey)
+      .filter((key) => /^(?:\d+|os:\d+)$/.test(key) && !(key in accountAvatars) && !avatarRequested.has(key));
+    if (!keys.length) return;
+    keys.forEach((key) => avatarRequested.add(key));
+    const data = await api(`/api/account/avatars?uids=${keys.join(",")}`);
     Object.assign(accountAvatars, data.avatars || {});
     applyAccountAvatars();
   } catch {
@@ -1667,45 +1680,93 @@ async function loadAccountAvatars() {
 // 异步取回头像后就地换图，不重绘账号列表，免得打断正在进行的编辑或登录
 function applyAccountAvatars() {
   (config.accounts || []).forEach((account, index) => {
-    const uid = String(account.stuid || "");
-    const url = accountAvatars[uid];
+    const key = avatarKey(account);
+    const url = accountAvatars[key];
     const img = document.querySelector(`.account-row[data-index="${index}"] .acc-avatar`);
     if (!url || !img || img.classList.contains("is-remote")) return;
-    img.dataset.avatarUid = uid;
+    img.dataset.avatarUid = key;
     img.classList.add("is-remote");
     img.src = url;
     bindAvatarFallback(img);
   });
 }
 
-function getFilteredGoods() {
-  if (shopFilterStatus === "sold_out") {
-    return shopGoods.filter((good) => isShopGoodSoldOut(good));
+// 国服 / 国际服共用同一份账号列表，账号上的 region 只决定登录方式和哪些功能适用
+function isOverseas(account) {
+  return account?.region === "os";
+}
+
+// 两边的 UID 可能撞号，头像缓存按服务器分开存
+function avatarKey(account) {
+  const uid = String(account?.stuid || "");
+  return isOverseas(account) ? `os:${uid}` : uid;
+}
+
+// 登录成功后清掉这张卡片记住的头像，随后的重绘会重新取一次
+// （换了账号、上次没取到、或者之前根本没登录）
+function forgetAccountAvatar(account) {
+  const key = avatarKey(account);
+  if (!key) return;
+  delete accountAvatars[key];
+  avatarRequested.delete(key);
+}
+
+// 服务器只能在还没登录时选；登录之后凭证属于哪一边就固定了
+function accountRegionControl(account, index, editing, loggedIn) {
+  const overseas = isOverseas(account);
+  if (!editing || loggedIn) {
+    return `<input data-field="region" type="hidden" value="${overseas ? "os" : "cn"}" />`;
   }
-  if (shopFilterStatus === "available") {
-    return shopGoods.filter(
-        (good) => !isShopGoodSoldOut(good) && canShopGoodExchangeNow(good),
-    );
-  }
-  return shopGoods;
+  return `
+    <label class="acc-region">
+      <span>服务器</span>
+      <div class="select-wrapper">
+        <select data-field="region" data-region-select="${index}">
+          <option value="cn" ${overseas ? "" : "selected"}>国服（米游社）</option>
+          <option value="os" ${overseas ? "selected" : ""}>国际服（HoYoLAB）</option>
+        </select>
+        <svg class="select-arrow" width="12" height="8" aria-hidden="true"><use href="#arrow-down"/></svg>
+      </div>
+    </label>
+  `;
 }
 
 function accountCard(account, index) {
   const editing = editingAccountIndex === index;
   const loggedIn = Boolean(account.stuid);
-  const avatarUrl = loggedIn ? accountAvatars[String(account.stuid)] || "" : "";
-  const cloudCount = accountCloudCount(account);
-  const cloudOpen = expandedCloudAccounts.has(index);
+  const overseas = isOverseas(account);
+  // 头像走各自服务器的公开资料接口，国际服取 HoYoLAB 的头像
+  const avatarUrl = loggedIn ? accountAvatars[avatarKey(account)] || "" : "";
+  const cloudCount = overseas ? 0 : accountCloudCount(account);
+  const cloudOpen = !overseas && expandedCloudAccounts.has(index);
+  const regionControl = accountRegionControl(account, index, editing, loggedIn);
   const nameField = editing
     ? `<input class="acc-edit-input" data-field="name" type="text" maxlength="10" placeholder="最多 10 字" value="${escapeAttr(account.name || "")}" />`
     : `<span class="acc-name-text">${escapeHtml(accountLabel(account))}</span>
        <input data-field="name" type="hidden" value="${escapeAttr(account.name || "")}" />`;
-  const meta = loggedIn
-    ? `<span class="acc-uid">UID ${escapeHtml(account.stuid)}</span>
-       <span class="acc-chip ${cloudCount ? "on" : ""}">
+  const cloudChip = overseas
+    ? ""
+    : `<span class="acc-chip ${cloudCount ? "on" : ""}">
          <svg><use href="#i-cloud"></use></svg>${cloudCount ? `云游戏 ${cloudCount}/2` : "云游戏未配置"}
-       </span>`
-    : `<span>还没有登录，点「登录方式」扫码或验证码登录</span>`;
+       </span>`;
+  const loginHint = overseas
+    ? "点「粘贴 Cookie」填入 HoYoLAB 的 cookie"
+    : "点「登录方式」扫码或验证码登录";
+  // 编辑态还没有登录按钮，只留名字长度提示；登录引导等保存后再出现
+  const meta = loggedIn
+    ? `<span class="acc-uid">UID ${escapeHtml(account.stuid)}</span>${cloudChip}`
+    : editing
+      ? ""
+      : `<span>还没有登录，${loginHint}</span>`;
+  const loginLabel = overseas
+    ? loggedIn ? "更新 Cookie" : "粘贴 Cookie"
+    : loggedIn ? "刷新登录" : "登录方式";
+  const cloudButton = overseas
+    ? ""
+    : `<button class="ghost ${cloudOpen || cloudCount ? "is-active" : ""}" type="button" data-toggle-cloud="${index}" title="云游戏签到凭证">
+         <svg><use href="#i-cloud"></use></svg>
+         <span>云游戏凭证</span>
+       </button>`;
   const actions = editing
     ? `<span class="spacer"></span>
        <button class="ghost" type="button" data-cancel-account="${index}">
@@ -1717,13 +1778,10 @@ function accountCard(account, index) {
          <span>保存</span>
        </button>`
     : `<button class="${loggedIn ? "ghost" : "primary"}" type="button" data-login="${index}">
-         <svg><use href="#i-phone"></use></svg>
-         <span>${loggedIn ? "刷新登录" : "登录方式"}</span>
+         <svg><use href="#${overseas ? "i-edit" : "i-phone"}"></use></svg>
+         <span>${loginLabel}</span>
        </button>
-       <button class="ghost ${cloudOpen || cloudCount ? "is-active" : ""}" type="button" data-toggle-cloud="${index}" title="云游戏签到凭证">
-         <svg><use href="#i-cloud"></use></svg>
-         <span>云游戏凭证</span>
-       </button>
+       ${cloudButton}
        <span class="spacer"></span>
        <button class="ghost icon-only" type="button" data-edit-account="${index}" title="编辑账号名">
          <svg><use href="#i-edit"></use></svg>
@@ -1735,23 +1793,26 @@ function accountCard(account, index) {
   return `
     <article class="account-row acc-card ${editing ? "is-editing" : ""}" data-index="${index}" data-draft="${account._draft ? "1" : "0"}">
       <div class="acc-head">
-        <img class="acc-avatar${loggedIn ? "" : " is-empty"}${avatarUrl ? " is-remote" : ""}" src="${escapeAttr(avatarUrl || DEFAULT_AVATAR)}" ${avatarUrl ? `data-avatar-uid="${escapeAttr(account.stuid)}" ` : ""}referrerpolicy="no-referrer" alt="" width="44" height="44" />
+        <img class="acc-avatar${loggedIn ? "" : " is-empty"}${avatarUrl ? " is-remote" : ""}" src="${escapeAttr(avatarUrl || DEFAULT_AVATAR)}" ${avatarUrl ? `data-avatar-uid="${escapeAttr(avatarKey(account))}" ` : ""}referrerpolicy="no-referrer" alt="" width="44" height="44" />
         <div class="acc-body">
           <div class="acc-name">
             ${nameField}
             <span class="acc-pill ${loggedIn ? "ok" : "off"}">${loggedIn ? "已登录" : "未登录"}</span>
+            ${overseas ? `<span class="acc-pill os">国际服</span>` : ""}
             ${account._draft ? `<span class="acc-pill draft">未保存</span>` : ""}
           </div>
-          <div class="acc-meta">${meta}</div>
+          ${meta ? `<div class="acc-meta">${meta}</div>` : ""}
           ${editing ? `<div class="acc-hint">最多 10 个字，仅用于本地显示</div>` : ""}
+          ${editing && !loggedIn ? regionControl : ""}
         </div>
       </div>
       <div class="acc-actions">${actions}</div>
+      ${editing && !loggedIn ? "" : regionControl}
       <input data-field="stuid" type="hidden" value="${escapeAttr(account.stuid || "")}" />
       <input data-field="stoken" type="hidden" value="${escapeAttr(account.stoken || "")}" />
       <input data-field="mid" type="hidden" value="${escapeAttr(account.mid || "")}" />
       <textarea class="hidden-field" data-field="cookie">${escapeHtml(account.cookie || "")}</textarea>
-      ${accountCloudGameFields(account, index)}
+      ${overseas ? accountCloudGameHiddenFields(account.cloud_games?.tokens || {}) : accountCloudGameFields(account, index)}
       <div class="account-login-slot" data-login-slot="${index}"></div>
     </article>
   `;
@@ -1818,12 +1879,7 @@ function collectConfig() {
   config.features = config.features || {};
   config.games = config.games || {};
   config.cloud_games = config.cloud_games || {};
-  config.bbs = {
-    ...(config.bbs || {}),
-    read: false,
-    like: false,
-    share: false,
-  };
+  config.bbs = { ...(config.bbs || {}) };
   // 「仅失败时推送」在通道弹窗里改，值直接维护在 config 上，不再从 DOM 读
   config.push = config.push || {};
   // 通道参数在弹窗里编辑、保存时写回内存，这里只做规整和过滤，
@@ -1909,982 +1965,31 @@ function collectAccountCloudGames(row) {
   };
 }
 
-function renderShopConfig() {
-  if (!$("shopEnable")) return;
-  const shop = config.shop_exchange || {};
-  $("shopEnable").checked = Boolean(shop.enable ?? false);
-  $("shopRetrySeconds").value = shop.retry_seconds ?? 20;
-  $("shopRetryInterval").value = shop.retry_interval ?? 0.4;
-  $("shopPush").checked = Boolean(shop.push ?? false);
-  if ($("shopGoodsMetric")) {
-    const total = shopGoods.length;
-    const totalPages = Math.max(1, Math.ceil(total / SHOP_PAGE_SIZE));
-    $("shopGoodsMetric").textContent = shopGoodsLoading
-        ? "加载中"
-        : `${total} 件`;
-  }
-  if ($("shopPlansMetric"))
-    $("shopPlansMetric").textContent = String((shop.plans || []).length);
-  renderShopGameFilter();
-  renderShopGoods();
-  renderShopGoodsLoadingState();
-  renderShopPlans();
-}
-
-function renderShopGameFilter() {
-  const select = $("shopGameFilter");
-  if (!select) return;
-  select.innerHTML = shopGames
-    .map(
-      (game) =>
-        `<option value="${escapeAttr(game.key)}" ${game.key === shopSelectedGame ? "selected" : ""}>${escapeHtml(game.name)}</option>`,
-    )
-    .join("");
-}
-
-function renderShopGoodsLoadingState() {
-  const select = $("shopGameFilter");
-  const button = $("shopRefreshBtn");
-  if (select) select.disabled = shopGoodsLoading;
-  if (!button) return;
-  const label = button.querySelector("span");
-  button.disabled = shopGoodsLoading;
-  button.classList.toggle("is-loading", shopGoodsLoading);
-  if (label) label.textContent = shopGoodsLoading ? "加载中" : "刷新商品";
-}
-function renderShopGoods() {
-  const list = $("shopGoods");
-  if (!list) return;
-
-  if (shopGoodsLoading) {
-    list.innerHTML = `<div class="empty-state shop-empty shop-loading">
-        <span class="qr-loading" aria-hidden="true"></span>
-        <strong>商品加载中</strong>
-        <span>正在获取商品图片、兑换时间、库存和限购信息。</span>
-      </div>`;
-    renderShopPagination();
-    return;
-  }
-
-  const filtered = getFilteredGoods();
-  const total = filtered.length;
-  const totalPages = Math.max(1, Math.ceil(total / SHOP_PAGE_SIZE));
-  if (shopCurrentPage > totalPages) shopCurrentPage = totalPages;
-
-  const start = (shopCurrentPage - 1) * SHOP_PAGE_SIZE;
-  const pageGoods = filtered.slice(start, start + SHOP_PAGE_SIZE);
-
-  if (pageGoods.length) {
-    list.innerHTML = pageGoods
-        .map((good) => shopGoodCard(good, shopGoods.indexOf(good)))  // 全局索引
-        .join("");
-  } else {
-    list.innerHTML = `<div class="empty-state shop-empty">
-        <strong>暂无商品数据</strong>
-        <span>${shopFilterStatus ? "当前筛选条件下没有商品。" : "点击刷新商品后，会显示兑换时间、库存、价格和图片。"}</span>
-      </div>`;
-  }
-
-  bindShopGoodsEvents();
-  renderShopPagination();
-}
-function renderShopPagination(){
-  let container = $("shopPagination");
-  const list = $("shopGoods");
-
-  if (!container && list) {
-    container = document.createElement("div");
-    container.id = "shopPagination";
-    container.className = "shop-pagination";
-    list.parentNode.insertBefore(container, list.nextSibling);
-  }
-  if (!container) return;
-
-  // 加载中或筛选后不足一页 / 无数据 → 隐藏分页
-  const filtered = shopGoodsLoading ? [] : getFilteredGoods();
-  if (filtered.length <= SHOP_PAGE_SIZE) {
-    container.innerHTML = "";
-    container.style.display = "none";
-    return;
-  }
-  container.style.display = "flex";
-
-  const total = Math.max(1, Math.ceil(filtered.length / SHOP_PAGE_SIZE));
-  if (shopCurrentPage > total) shopCurrentPage = total;
-  if (shopCurrentPage < 1) shopCurrentPage = 1;
-  const current = shopCurrentPage;
-
-  let html = `
-    <button class="ghost page-btn" data-page="prev" ${current <= 1 ? 'disabled' : ''}>
-      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-    </button>
-  `;
-
-  const pages = getVisiblePages(current, total);
-  for (const p of pages) {
-    if (p === "...") {
-      html += `<span class="page-ellipsis">…</span>`;
-    } else {
-      html += `<button class="ghost page-btn ${p === current ? 'is-active' : ''}" data-page="${p}">${p}</button>`;
-    }
-  }
-
-  html += `
-    <button class="ghost page-btn" data-page="next" ${current >= total ? 'disabled' : ''}>
-      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-    </button>
-    <span class="page-info">${current} / ${total}</span>
-  `;
-
-  container.innerHTML = html;
-
-  container.querySelectorAll("[data-page]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const page = btn.dataset.page;
-      if (page === "prev" && current > 1) {
-        shopCurrentPage = current - 1;
-      } else if (page === "next" && current < total) {
-        shopCurrentPage = current + 1;
-      } else if (page !== "prev" && page !== "next") {
-        shopCurrentPage = Number(page);
-      } else {
-        return;
-      }
-      renderShopGoods();
-      const listEl = $("shopGoods");
-      if (!listEl) return;
-      // 一屏布局下商品列表自己滚动，翻页后回到列表顶部；窄屏下才整页滚动
-      if (getComputedStyle(listEl).overflowY === "auto") listEl.scrollTop = 0;
-      else listEl.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  });
-}
-// 辅助函数：计算可见页码列表
-function getVisiblePages(current, total) {
-  const maxVisible = 7;  // 最多显示7个页码
-  const pages = [];
-
-  if (total <= maxVisible) {
-    for (let i = 1; i <= total; i++) pages.push(i);
-    return pages;
-  }
-
-  pages.push(1);
-  let left = Math.max(2, current - 2);
-  let right = Math.min(total - 1, current + 2);
-
-  if (left > 2) pages.push("...");
-  for (let i = left; i <= right; i++) pages.push(i);
-  if (right < total - 1) pages.push("...");
-  pages.push(total);
-
-  return pages;
-}
-
-function shopGoodCard(good, index) {
-  const soldOut = isShopGoodSoldOut(good);
-  const canAddPlan = canShopGoodAddPlan(good);
-  const exchangeNow = canShopGoodExchangeNow(good);
-  const exchanging = shopExchangeNowGoodsId === String(good.goods_id || "");
-  const exchangeLabel =
-    good.display_status === "sold_out_with_next" ? "下次兑换" : "兑换";
-  const exchangeButtonText = exchanging
-    ? "兑换中"
-    : soldOut
-      ? "已售罄"
-      : exchangeNow
-        ? "兑换"
-        : "即将开启";
-  const exchangeButtonTitle = exchanging
-    ? "正在发送兑换请求"
-    : soldOut
-      ? "商品已售罄"
-      : exchangeNow
-        ? "立即发送兑换请求"
-        : "商品还未开启兑换";
-  const image = good.icon
-    ? `<img src="${escapeAttr(good.icon)}" alt="${escapeAttr(good.goods_name)}" loading="lazy" />`
-    : `<div class="shop-image-fallback">无图</div>`;
-  return `
-    <article class="shop-good ${soldOut ? "is-sold-out" : ""}" data-shop-good="${index}">
-      <div class="shop-good-image">${image}</div>
-      <div class="shop-good-main">
-        <div class="shop-good-title">
-          <strong>${escapeHtml(good.goods_name)}</strong>
-        </div>
-        <div class="shop-good-meta">
-          <span>${exchangeLabel} ${escapeHtml(good.exchange_time || "-")}</span>
-          <span class="${soldOut ? "sold-out" : ""}">${soldOut ? "已售罄" : `库存 ${escapeHtml(good.stock || "-")}`}</span>
-          <span>${escapeHtml(String(good.price ?? 0))} 米游币</span>
-          <span>${escapeHtml(good.limit || "-")}</span>
-        </div>
-      </div>
-      <div class="shop-good-actions">
-        <button class="ghost" type="button" data-shop-add="${index}" title="${canAddPlan ? "加入兑换计划" : "商品已售罄"}" ${canAddPlan ? "" : "disabled"}>
-          <svg><use href="#i-plus"></use></svg>
-          <span>计划</span>
-        </button>
-        <button class="primary ${exchanging ? "is-loading" : ""}" type="button" data-shop-now="${index}" title="${exchangeButtonTitle}" ${exchangeNow && !exchanging ? "" : "disabled"}>
-          <svg><use href="#i-play"></use></svg>
-          <span>${exchangeButtonText}</span>
-        </button>
-      </div>
-    </article>
-  `;
-}
-
-function renderShopPlans() {
-  const list = $("shopPlans");
-  if (!list) return;
-  document
-    .querySelectorAll("details.shop-plan[open]")
-    .forEach((plan) => shopOpenPlans.add(plan.dataset.shopPlan));
-  const plans = config.shop_exchange?.plans || [];
-  list.innerHTML = plans.length
-    ? plans.map((plan, index) => shopPlanRow(plan, index)).join("")
-    : `<div class="empty-state">
-        <strong>暂无兑换计划</strong>
-        <span>从商品列表加入计划后，可设置账号、时间和可选的收货地址或游戏角色。</span>
-      </div>`;
-  bindShopPlanEvents();
-}
-// 计划绑定的是账号的 stuid，下标只是当前列表里的位置；找不到绑定账号时返回 -1
-function shopPlanAccountIndex(plan, accounts) {
-  const stuid = String(plan.account_stuid || "");
-  if (!stuid) return Number(plan.account_index || 0);
-  return accounts.findIndex((account) => String(account.stuid || "") === stuid);
-}
-function shopPlanRow(plan, index) {
-  const accounts = config.accounts || [];
-  const paused = plan.enable === false;
-  const running = Boolean(shopRunningProgress[String(index)]);
-  const open = shopOpenPlans.has(String(index)) ? "open" : "";
-  const roleDisplay = shopRoleDisplay(plan);
-  const serverDisplay = shopServerDisplay(plan);
-  const selectedAccount = shopPlanAccountIndex(plan, accounts);
-  // 计划绑定的账号已不在列表里时单独占一项，不能让下拉框悄悄落到第一个账号上
-  const missingOption =
-      selectedAccount < 0
-          ? `<option value="" data-stuid="${escapeAttr(plan.account_stuid || "")}" selected>账号已删除，请重新选择</option>`
-          : "";
-  const accountOptions =
-      accounts.length || missingOption
-          ? missingOption +
-          accounts
-              .map((account, accountIndex) => {
-                const selected = accountIndex === selectedAccount ? "selected" : "";
-                return `<option value="${accountIndex}" data-stuid="${escapeAttr(account.stuid || "")}" ${selected}>${escapeHtml(accountLabel(account))}</option>`;
-              })
-              .join("")
-          : `<option value="0">暂无账号</option>`;
-  return `
-    <details class="shop-plan ${paused ? "is-paused" : ""}" data-shop-plan="${index}" ${open}>
-      <summary class="shop-plan-summary">
-        <span class="shop-plan-title">
-          <strong>${escapeHtml(plan.goods_name || plan.goods_id)}</strong>
-          <small>${escapeHtml(shopPlanStatus(plan, index))}</small>
-        </span>
-        <span class="shop-plan-badges">
-          <span class="plan-badge ${running ? "running" : paused ? "paused" : "active"}">${running ? "兑换中" : paused ? "已暂停" : "自动"}</span>
-          <span class="disclosure" aria-hidden="true"></span>
-        </span>
-      </summary>
-      <div class="shop-plan-body">
-        <div class="shop-plan-head">
-          <label class="check-row">
-            <input data-shop-plan-field="enable" type="checkbox" ${plan.enable !== false ? "checked" : ""} data-autosave />
-            <span>启用该计划</span>
-          </label>
-          <button class="ghost icon-only" type="button" data-shop-remove="${index}" title="删除计划">
-            <svg><use href="#i-trash"></use></svg>
-          </button>
-        </div>
-      <div class="form-grid two compact">
-        <label>
-          <span>执行账号</span>
-          <div class="select-wrapper">
-             <select data-shop-plan-field="account_index" data-autosave>${accountOptions}</select>
-             <svg class="select-arrow" width="12" height="8" aria-hidden="true">
-                 <use href="#arrow-down"/>
-             </svg>
-          </div>
-        </label>
-        <label>
-          <span>兑换时间</span>
-          <input data-shop-plan-field="exchange_at" type="datetime-local" value="${escapeAttr(timestampToLocalInput(plan.exchange_at))}" data-autosave />
-        </label>
-        ${Number(plan.type || 0) !== 2 ? `
-        <label>
-          <span>收货地址</span>
-          <div class="select-wrapper">
-            <select data-shop-plan-field="address_id" data-autosave data-address-select>
-                ${shopPlanAddressSelectHtml(plan)}
-            </select>
-             <svg class="select-arrow" width="12" height="8" aria-hidden="true">
-                 <use href="#arrow-down"/>
-             </svg>
-          </div>
-        </label>` : ""}
-        <div class="readonly-field">
-          <span>游戏角色</span>
-          <strong>${escapeHtml(roleDisplay)}</strong>
-        </div>
-        <div class="readonly-field">
-          <span>服务器</span>
-          <strong>${escapeHtml(serverDisplay)}</strong>
-        </div>
-      </div>
-      <input data-shop-plan-field="auto" type="hidden" value="${plan.auto === false ? "false" : "true"}" />
-      <input data-shop-plan-field="goods_id" type="hidden" value="${escapeAttr(plan.goods_id || "")}" />
-      <input data-shop-plan-field="goods_name" type="hidden" value="${escapeAttr(plan.goods_name || "")}" />
-      <input data-shop-plan-field="icon" type="hidden" value="${escapeAttr(plan.icon || "")}" />
-      <input data-shop-plan-field="price" type="hidden" value="${escapeAttr(plan.price ?? 0)}" />
-      <input data-shop-plan-field="stock" type="hidden" value="${escapeAttr(plan.stock || "")}" />
-      <input data-shop-plan-field="type" type="hidden" value="${escapeAttr(plan.type ?? 0)}" />
-      <input data-shop-plan-field="game" type="hidden" value="${escapeAttr(plan.game || "")}" />
-      <input data-shop-plan-field="device_fp" type="hidden" value="${escapeAttr(plan.device_fp || "")}" />
-      <input data-shop-plan-field="uid" type="hidden" value="${escapeAttr(plan.uid || "")}" />
-      <input data-shop-plan-field="region" type="hidden" value="${escapeAttr(plan.region || "")}" />
-      <input data-shop-plan-field="game_biz" type="hidden" value="${escapeAttr(plan.game_biz || "")}" />
-      <input data-shop-plan-field="role_name" type="hidden" value="${escapeAttr(plan.role_name || "")}" />
-      <input data-shop-plan-field="region_name" type="hidden" value="${escapeAttr(plan.region_name || "")}" />
-      <input data-shop-plan-field="last_result" type="hidden" value="${escapeAttr(plan.last_result || "")}" />
-      <input data-shop-plan-field="last_attempt_key" type="hidden" value="${escapeAttr(plan.last_attempt_key || "")}" />
-      <input data-shop-plan-field="last_run" type="hidden" value="${escapeAttr(plan.last_run || "")}" />
-      <div class="shop-plan-foot">
-        <span>${escapeHtml(shopPlanStatus(plan, index))}</span>
-        <button class="ghost" type="button" data-shop-plan-now="${index}" title="立即执行该兑换计划">
-          <svg><use href="#i-play"></use></svg>
-          <span>立即兑换</span>
-        </button>
-      </div>
-      </div>
-    </details>
-  `;
-}
-
-function bindShopGoodsEvents() {
-  document.querySelectorAll("[data-shop-add]").forEach((button) => {
-    button.addEventListener("click", () =>
-      withButtonLoading(button, "添加中", () =>
-        addShopPlan(shopGoods[Number(button.dataset.shopAdd)]),
-      ),
-    );
-  });
-  document.querySelectorAll("[data-shop-now]").forEach((button) => {
-    button.addEventListener("click", () =>
-      exchangeGoodNow(shopGoods[Number(button.dataset.shopNow)]).catch(
-        (error) => showToast(error.message),
-      ),
-    );
-  });
-}
-
-function bindShopPlanEvents() {
-  document.querySelectorAll("details.shop-plan").forEach((details) => {
-    details.addEventListener("toggle", () => {
-      if (details.open) shopOpenPlans.add(details.dataset.shopPlan);
-      else shopOpenPlans.delete(details.dataset.shopPlan);
-    });
-  });
-  document.querySelectorAll("[data-shop-remove]").forEach((button) => {
-    button.addEventListener("click", () => {
-      collectConfig();
-      config.shop_exchange.plans.splice(Number(button.dataset.shopRemove), 1);
-      renderShopPlans();
-      autoSaveConfig()
-        .then(() => showToast("兑换计划已删除"))
-        .catch((error) => showToast(error.message));
-    });
-  });
-  document.querySelectorAll("[data-shop-plan-now]").forEach((button) => {
-    button.addEventListener("click", () => {
-      collectConfig();
-      withButtonLoading(button, "兑换中", () =>
-        exchangePlanNow(Number(button.dataset.shopPlanNow)),
-      );
-    });
-  });
-  document
-    .querySelectorAll('[data-shop-plan-field="account_index"]')
-    .forEach((select) => {
-      select.addEventListener("change", () => {
-        const row = select.closest("[data-shop-plan]");
-        const index = Number(row?.dataset.shopPlan);
-        collectConfig();
-        refreshShopPlanRole(index)
-          .catch((error) => showToast(error.message))
-          .then(() => refreshShopPlanAddresses(index))
-          .catch((error) => showToast(error.message));
-      });
-    });
-}
-
-function collectShopExchange() {
-  const existing = config?.shop_exchange || {};
-  const shop = {
-    ...(existing || {}),
-    enable: Boolean($("shopEnable")?.checked ?? existing.enable ?? false),
-    retry_seconds: Number(
-      $("shopRetrySeconds")?.value || existing.retry_seconds || 20,
-    ),
-    retry_interval: Number(
-      $("shopRetryInterval")?.value || existing.retry_interval || 0.4,
-    ),
-    push: Boolean($("shopPush")?.checked ?? existing.push ?? false),
-    plans: [],
-  };
-  document.querySelectorAll("[data-shop-plan]").forEach((row) => {
-    const plan = {};
-    row.querySelectorAll("[data-shop-plan-field]").forEach((field) => {
-      const key = field.dataset.shopPlanField;
-      if (key === "enable") plan[key] = field.checked;
-      else if (key === "account_index") {
-        plan[key] = Number(field.value || 0);
-        // 身份取自选项本身：下拉框渲染后账号列表可能已经变动，只看下标会指向别的账号
-        plan.account_stuid = field.selectedOptions?.[0]?.dataset.stuid || "";
-      } else if (key === "price") plan[key] = Number(field.value || 0);
-      else if (key === "exchange_at")
-        plan[key] = localInputToTimestamp(field.value);
-      else if (key === "auto") plan[key] = field.value !== "false";
-      else plan[key] = field.value.trim();
-    });
-    const accountIndex = shopPlanAccountIndex(plan, config?.accounts || []);
-    if (accountIndex >= 0) plan.account_index = accountIndex;
-    if (plan.goods_id) shop.plans.push(plan);
-  });
-  return shop;
-}
-
-async function addShopPlan(good) {
-  if (!good) return;
-  if (!canShopGoodAddPlan(good))
-    throw new Error("商品已售罄，不能加入兑换计划");
-
-  const accountIndex = await chooseShopPlanAccount(good);
-  if (accountIndex === null) return;
-
-  collectConfig();
-  config.shop_exchange = config.shop_exchange || {
-    enable: true,
-    retry_seconds: 20,
-    retry_interval: 0.4,
-    plans: [],
-  };
-
-  if (!(config.accounts || [])[accountIndex]?.stuid) {
-    throw new Error("请先添加并登录账号");
-  }
-
-  const existingIndex = config.shop_exchange.plans.findIndex(
-    (p) => p.goods_id === good.goods_id && p.account_index === accountIndex,
-  );
-
-  if (existingIndex >= 0) {
-    showToast("同账号已有相同计划");
-    return;
-  }
-
-  const accountName = accountLabel(config.accounts[accountIndex]);
-  const checkError = await checkShopAccountLogin(accountIndex);
-  if (checkError) {
-    showToast(`${accountName} 登录已过期，请重新登录`);
-    return;
-  }
-
-  const plan = await buildShopPlan(good, accountIndex);
-  config.shop_exchange.plans.push(plan);
-  const planIndex = config.shop_exchange.plans.length - 1;
-  renderShopPlans();
-  // 只为新添加的计划加载地址并自动填充
-  await refreshShopPlanAddresses(planIndex, true);
-  saveConfig("已加入兑换计划").catch((error) => showToast(error.message));
-}
-
-async function loadShopGoods() {
-  const game = $("shopGameFilter")?.value ?? shopSelectedGame;
-  const loadSeq = ++shopGoodsLoadSeq;
-  shopSelectedGame = game;
-  shopGoodsLoading = true;
-  shopFilterStatus = "";
-  if ($("shopStatusFilter")) $("shopStatusFilter").value = "";
-  renderShopConfig();
-  try {
-    const data = await api(`/api/shop/goods?game=${encodeURIComponent(game)}`);
-    if (loadSeq !== shopGoodsLoadSeq) return;
-    shopGoods = data.goods || [];
-    shopCurrentPage = 1;  // ← 新增：重置页码
-    if (Array.isArray(data.games) && data.games.length) {
-      shopGames = data.games;
-    }
-    showToast("商品列表已刷新");
-  } finally {
-    if (loadSeq === shopGoodsLoadSeq) {
-      shopGoodsLoading = false;
-      renderShopConfig();
-    }
-  }
-}
-
-async function exchangeGoodNow(good) {
-  if (!good) return;
-  if (isShopGoodSoldOut(good)) throw new Error("商品已售罄，不能兑换");
-  if (!canShopGoodExchangeNow(good)) throw new Error("商品还未开启兑换");
-  collectConfig();
-  const accountIndex = await chooseShopExchangeAccount(good);
-  if (accountIndex === null) return;
-  if (!(config.accounts || [])[accountIndex]?.stuid) {
-    throw new Error("请先添加并登录账号");
-  }
-  shopRequestInFlight = true;
-  shopExchangeNowGoodsId = String(good.goods_id || "");
-  renderShopGoods();
-  try {
-    const plan = await buildShopPlan(good, accountIndex);
-    await exchangePlanNow(plan);
-  } finally {
-    shopExchangeNowGoodsId = "";
-    shopRequestInFlight = false;
-    renderShopGoods();
-  }
-}
-
-async function exchangePlanNow(planOrIndex) {
-  const body =
-    typeof planOrIndex === "number"
-      ? { plan_index: planOrIndex }
-      : { plan: planOrIndex };
-  if (body.plan === null || body.plan === undefined)
-    throw new Error("兑换计划不存在");
-  const response = await api("/api/shop/exchange", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  const result = response.result || {};
-  if (response.config) {
-    config = response.config;
-    config.accounts = (config.accounts || []).map((account) => ({
-      ...account,
-      _draft: false,
-    }));
-    renderConfig();
-  }
-  showToast(`兑换请求完成：${result.message || "未知结果"}`);
-  await refreshStatus();
-}
-
-async function buildShopPlan(good, accountIndex) {
-  const fpData = await api("/api/shop/device-fp");
-  const detail = await api(
-    `/api/shop/good-detail?goods_id=${encodeURIComponent(good.goods_id)}`,
-  );
-  const base = { ...good, ...detail };
-  const plan = {
-    enable: true,
-    auto: true,
-    account_index: accountIndex,
-    account_stuid: String((config.accounts || [])[accountIndex]?.stuid || ""),
-    goods_id: base.goods_id,
-    goods_name: base.goods_name,
-    icon: base.icon,
-    price: base.price,
-    stock: base.stock,
-    type: Number(base.type || 0),
-    exchange_at: base.exchange_timestamp || Math.floor(Date.now() / 1000),
-    game: base.game || "",
-    game_biz: base.game_biz || "",
-    device_fp: fpData.device_fp || "",
-    uid: "",
-    region: "",
-    role_name: "",
-    region_name: "",
-    address_id: "",
-    last_result: "",
-    last_attempt_key: "",
-    last_run: "",
-  };
-  if (Number(base.type || 0) === 2) {
-    if (!plan.game_biz) {
-      throw new Error("商品详情缺少 game_biz，无法自动匹配游戏角色");
-    }
-    const meta = await api(
-      `/api/shop/account-meta?account_index=${accountIndex}&game_biz=${encodeURIComponent(plan.game_biz)}`,
-    );
-    const role = (meta.roles || [])[0];
-    if (!role) {
-      throw new Error("未找到该商品对应的绑定游戏角色");
-    }
-    plan.uid = role.uid || "";
-    plan.region = role.region || "";
-    plan.role_name = role.nickname || "";
-    plan.region_name = role.region_name || "";
-  }
-  return plan;
-}
-
-async function refreshShopPlanRole(index) {
-  collectConfig();
-  const plan = config.shop_exchange?.plans?.[index];
-  if (!plan || !plan.game_biz) return;
-  const meta = await api(
-    `/api/shop/account-meta?account_index=${plan.account_index}&game_biz=${encodeURIComponent(plan.game_biz)}`,
-  );
-  const role = (meta.roles || [])[0];
-  if (!role) {
-    plan.uid = "";
-    plan.region = "";
-    plan.role_name = "";
-    plan.region_name = "";
-    renderShopPlans();
-    throw new Error("当前账号未找到对应游戏角色");
-  }
-  plan.uid = role.uid || "";
-  plan.region = role.region || "";
-  plan.role_name = role.nickname || "";
-  plan.region_name = role.region_name || "";
-  renderShopPlans();
-  await autoSaveConfig();
-  showToast("游戏角色已更新");
-}
-
-async function refreshShopPlanAddresses(index, autoFill = false) {
-  const plan = config.shop_exchange?.plans?.[index];
-  if (!plan || Number(plan.type || 0) === 2) return;
-  const accountIndex = Number(plan.account_index || 0);
-  const select = document.querySelector(
-    `[data-shop-plan="${index}"] [data-address-select]`,
-  );
-  if (!select) return;
-  const currentValue = plan.address_id || "";
-  select.innerHTML = `<option value="">加载中...</option>`;
-  select.disabled = true;
-  try {
-    const meta = await api(
-      `/api/shop/account-meta?account_index=${accountIndex}`,
-    );
-    const addresses = meta.addresses || [];
-    shopPlanAddressCache.set(accountIndex, addresses);
-    select.innerHTML = buildAddressOptions(addresses, currentValue);
-    // 只在 autoFill=true 时自动填充第一个地址
-    if (autoFill && !currentValue && addresses.length) {
-      const firstId = String(addresses[0].id || "");
-      select.value = firstId;
-      plan.address_id = firstId;
-    } else if (!autoFill && !currentValue && addresses.length) {
-      // 不自动填充时，只在UI上选择第一个作为默认显示
-      const firstId = String(addresses[0].id || "");
-      select.value = firstId;
-    } else if (currentValue && !addresses.some((a) => String(a.id) === currentValue)) {
-      select.innerHTML =
-        `<option value="${escapeAttr(currentValue)}">${escapeHtml(currentValue)}（已失效）</option>` +
-        select.innerHTML;
-      select.value = currentValue;
-    }
-  } catch {
-    select.innerHTML = `<option value="${escapeAttr(currentValue)}">${currentValue ? escapeHtml(currentValue) : "获取地址失败"}</option>`;
-  } finally {
-    select.disabled = false;
-  }
-}
-
-function shopPlanAddressSelectHtml(plan) {
-  const accountIndex = Number(plan.account_index || 0);
-  const cached = shopPlanAddressCache.get(accountIndex);
-  if (!cached) return `<option value="">加载中...</option>`;
-  // 不再自动修改 plan.address_id
-  // 如果 plan.address_id 为空，UI上可以选择第一个，但不写入配置
-  // if (!plan.address_id && cached.length) {
-  //   plan.address_id = String(cached[0].id || "");
-  // }
-  return buildAddressOptions(cached, plan.address_id || "");
-}
-
-function buildAddressOptions(addresses, selectedId) {
-  const options = [];
-  for (const addr of addresses) {
-    const id = String(addr.id || "");
-    const label = [addr.name, addr.address].filter(Boolean).join(" - ");
-    const sel = id === selectedId ? "selected" : "";
-    options.push(
-      `<option value="${escapeAttr(id)}" ${sel}>${escapeHtml(label || id)}</option>`,
-    );
-  }
-  return options.join("");
-}
-
-async function loadAllPlanAddresses({ autoFill = false } = {}) {
-  const plans = config.shop_exchange?.plans || [];
-  const tasks = [];
-  for (let i = 0; i < plans.length; i++) {
-    tasks.push(refreshShopPlanAddresses(i, autoFill).catch(() => {}));
-  }
-  await Promise.all(tasks);
-  // 只在需要自动填充时才保存配置
-  if (autoFill) {
-    autoSaveConfig().catch(() => {});
-  }
-}
-
-function shopRoleDisplay(plan) {
-  if (!plan.uid) return "不需要";
-  return [plan.role_name, plan.uid].filter(Boolean).join(" / ") || plan.uid;
-}
-
-function shopServerDisplay(plan) {
-  if (!plan.region && !plan.game_biz) return "不需要";
-  const readable = plan.region_name
-    ? `${plan.region_name}${plan.region ? ` (${plan.region})` : ""}`
-    : plan.region;
-  return [readable, plan.game_biz].filter(Boolean).join(" / ");
-}
-
-function isShopGoodSoldOut(good) {
-  return Boolean(good?.sold_out);
-}
-
-function canShopGoodAddPlan(good) {
-  if (!isShopGoodSoldOut(good)) return true;
-  return good?.display_status === "sold_out_with_next";
-}
-
-function canShopGoodExchangeNow(good) {
-  if (isShopGoodSoldOut(good)) return false;
-  return good?.display_status === "online" || good?.display_status === "always";
-}
-
-function loggedInAccountChoices() {
-  return (config.accounts || [])
-    .map((account, index) => ({ account, index }))
-    .filter(({ account }) => account?.stuid && account?.cookie);
-}
-
-function chooseShopExchangeAccount(good) {
-  const choices = loggedInAccountChoices();
-  if (!choices.length) {
-    throw new Error("请先添加并登录账号");
-  }
-  return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.innerHTML = `
-      <div class="modal-card shop-account-dialog" role="dialog" aria-modal="true" aria-labelledby="shopAccountDialogTitle">
-        <div class="modal-head">
-          <div>
-            <h2 id="shopAccountDialogTitle">选择兑换账号</h2>
-            <p>${escapeHtml(good.goods_name || "商品兑换")}</p>
-          </div>
-          <button class="ghost icon-only" type="button" data-modal-cancel title="关闭">
-            <svg><use href="#i-x"></use></svg>
-          </button>
-        </div>
-        <label>
-          <span>执行账号</span>
-          <div class="select-wrapper">
-              <select id="shopExchangeAccountSelect">
-                    ${choices
-              .map(
-                  ({ account, index }) =>
-                    `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
-              )
-              .join("")}
-              </select>
-              <svg class="select-arrow" width="12" height="8" aria-hidden="true">
-                <use href="#arrow-down"/>
-              </svg>
-          </div>
-        </label>
-        <div class="modal-actions">
-          <button class="ghost" type="button" data-modal-cancel>取消</button>
-          <button class="primary" type="button" data-modal-confirm>
-            <svg><use href="#i-play"></use></svg>
-            <span>确认兑换</span>
-          </button>
-        </div>
-      </div>
-    `;
-    document.body.insertBefore(overlay, document.querySelector(".toast"));
-    const select = overlay.querySelector("#shopExchangeAccountSelect");
-    const finish = (value) => {
-      overlay.remove();
-      resolve(value);
-    };
-    overlay.querySelectorAll("[data-modal-cancel]").forEach((control) => {
-      control.addEventListener("click", () => finish(null));
-    });
-    overlay
-      .querySelector("[data-modal-confirm]")
-      ?.addEventListener("click", () => finish(Number(select.value)));
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) finish(null);
-    });
-    overlay.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") finish(null);
-      if (event.key === "Enter") finish(Number(select.value));
-    });
-    select.focus();
-  });
-}
-
-function chooseShopPlanAccount(good) {
-  const choices = loggedInAccountChoices();
-  if (!choices.length) {
-    throw new Error("请先添加并登录账号");
-  }
-  return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.innerHTML = `
-      <div class="modal-card shop-account-dialog" role="dialog" aria-modal="true" aria-labelledby="shopPlanDialogTitle">
-        <div class="modal-head">
-          <div>
-            <h2 id="shopPlanDialogTitle">选择计划账号</h2>
-            <p>${escapeHtml(good.goods_name || "商品兑换计划")}</p>
-          </div>
-          <button class="ghost icon-only" type="button" data-modal-cancel title="关闭">
-            <svg><use href="#i-x"></use></svg>
-          </button>
-        </div>
-        <label>
-          <span>执行账号</span>
-          <div class="select-wrapper">
-          <select id="shopPlanAccountSelect">
-            ${choices
-              .map(
-                ({ account, index }) =>
-                `<option value="${index}">${escapeHtml(accountLabel(account))}</option>`,
-                )
-              .join("")}
-            </select>
-            <svg class="select-arrow" width="12" height="8" aria-hidden="true">
-                <use href="#arrow-down"/>
-            </svg>
-          </div>
-        </label>
-        <div class="modal-actions">
-          <button class="ghost" type="button" data-modal-cancel>取消</button>
-          <button class="primary" type="button" data-modal-confirm>
-            <svg><use href="#i-plus"></use></svg>
-            <span>添加计划</span>
-          </button>
-        </div>
-      </div>
-    `;
-    document.body.insertBefore(overlay, document.querySelector(".toast"));
-    const select = overlay.querySelector("#shopPlanAccountSelect");
-    const finish = (value) => {
-      overlay.remove();
-      resolve(value);
-    };
-    overlay.querySelectorAll("[data-modal-cancel]").forEach((control) => {
-      control.addEventListener("click", () => finish(null));
-    });
-    overlay
-      .querySelector("[data-modal-confirm]")
-      ?.addEventListener("click", () => finish(Number(select.value)));
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) finish(null);
-    });
-    overlay.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") finish(null);
-      if (event.key === "Enter") finish(Number(select.value));
-    });
-    select.focus();
-  });
-}
-
-async function checkShopAccountLogin(accountIndex) {
-  try {
-    const meta = await api(
-      `/api/shop/account-meta?account_index=${accountIndex}`,
-    );
-    const errors = [
-      meta.points_error || "",
-      meta.addresses_error || "",
-    ];
-    for (const err of errors) {
-      if (/未登录|登录失效|cookie.*过期|expired/i.test(err)) {
-        return err;
-      }
-    }
-    return null;
-  } catch (error) {
-    if (/未登录|登录失效|cookie.*过期|expired/i.test(error.message)) {
-      return error.message;
-    }
-    return null;
-  }
-}
-
-async function withButtonLoading(button, loadingText, task) {
-  if (!button) {
-    shopRequestInFlight = true;
-    try {
-      await task();
-    } finally {
-      shopRequestInFlight = false;
-    }
-    return;
-  }
-  if (button.disabled) return;
-  const label = button.querySelector("span");
-  const originalText = label?.textContent || "";
-  shopRequestInFlight = true;
-  button.disabled = true;
-  button.classList.add("is-loading");
-  if (label) label.textContent = loadingText;
-  try {
-    await task();
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    button.classList.remove("is-loading");
-    button.disabled = false;
-    if (label) label.textContent = originalText;
-    shopRequestInFlight = false;
-  }
-}
-
-function shopPlanStatus(plan, index) {
-  const progress = shopRunningProgress[String(index)];
-  if (progress) {
-    const attempt = Number(progress.attempt || 0);
-    const message = progress.message || "兑换中";
-    return attempt > 0
-        ? `兑换中 · 第 ${attempt} 次尝试 · ${message}`
-        : `兑换中 · ${message}`;
-  }
-  if (plan.last_result) {
-    return `${plan.enable === false ? "已暂停，" : ""}最近结果：${plan.last_result}`;
-  }
-  if (plan.enable === false) return "已暂停";
-  if (plan.exchange_at) {
-    return `等待 ${formatTime(timestampToIso(plan.exchange_at))}`;
-  }
-  return "未设置兑换时间";
-}
-
 function timestampToLocalInput(value) {
   const timestamp = Number(value || 0);
   if (!timestamp) return "";
   const date = new Date((timestamp + 8 * 60 * 60) * 1000);
   const pad = (item) => String(item).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
 function localInputToTimestamp(value) {
   if (!value) return 0;
-  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
   if (!match) return 0;
-  const [, year, month, day, hour, minute] = match;
+  const [, year, month, day, hour, minute, second] = match;
   const timestamp = Date.UTC(
     Number(year),
     Number(month) - 1,
     Number(day),
     Number(hour) - 8,
     Number(minute),
-    0,
+    Number(second || 0),
   );
-  return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : 0;
+  if (!Number.isFinite(timestamp)) return 0;
+  const result = Math.floor(timestamp / 1000);
+  const expected = `${year}-${month}-${day}T${hour}:${minute}:${second || "00"}`;
+  return timestampToLocalInput(result) === expected ? result : 0;
 }
 
 function timestampToIso(value) {
@@ -2911,8 +2016,8 @@ function serverConfig({ includeDrafts = true } = {}) {
   for (const channel of pushChannels) {
     if (channel.provider === 'qq' && channel.push_url && typeof channel.push_url === 'string') {
       const url = channel.push_url.trim();
-      if (url && !url.includes('http://')) {
-        throw new Error('QQ 推送的 HTTP API 地址必须包含 "http://"');
+      if (url && !/^https?:\/\//i.test(url)) {
+        throw new Error('QQ 推送的 HTTP API 地址必须以 "http://" 或 "https://" 开头');
       }
     }
   }
@@ -2921,31 +2026,25 @@ function serverConfig({ includeDrafts = true } = {}) {
 }
 
 function validateUniqueAccountUids(accounts) {
+  // 国服和国际服是两套账号体系，UID 只在同一服务器内要求唯一
   const seen = new Map();
   accounts.forEach((account, index) => {
     const uid = String(account.stuid || "").trim();
     if (!uid) return;
-    if (seen.has(uid)) {
+    const key = `${isOverseas(account) ? "os" : "cn"}:${uid}`;
+    if (seen.has(key)) {
       throw new Error(`UID ${uid} 已存在，不能重复添加同一账号`);
     }
-    seen.set(uid, index);
+    seen.set(key, index);
   });
 }
 
 async function saveConfig(message = "配置已保存") {
   const payload = serverConfig({ includeDrafts: true });
   validateUniqueAccountUids(payload.accounts || []);
-  isSavingConfig = true;
-  try {
-    await api("/api/config", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    showToast(message);
-    await loadConfig();
-  } finally {
-    isSavingConfig = false;
-  }
+  await enqueueConfigSave(payload);
+  showToast(message);
+  if (!isSavingConfig) await loadConfig();
 }
 
 // 账号变动后服务端会重新绑定兑换计划（下标重算、账号已删除的计划停用），这里把结果同步回界面
@@ -2955,22 +2054,32 @@ async function refreshShopPlans() {
   renderShopConfig();
 }
 
-async function autoSaveConfig() {
+let configSaveQueue = Promise.resolve();
+let configSavePending = 0;
+function autoSaveConfig() {
   const payload = serverConfig({ includeDrafts: false });
   validateUniqueAccountUids(payload.accounts || []);
+  return enqueueConfigSave(payload);
+}
+function enqueueConfigSave(payload) {
+  const revision = shopRevision;
+  configSavePending += 1;
   isSavingConfig = true;
-  try {
-    await api("/api/config", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  } finally {
-    isSavingConfig = false;
-  }
+  // 按页面操作顺序保存，防止较早的请求晚到，把后一次编辑覆盖掉。
+  const request = configSaveQueue.catch(() => {}).then(() => api("/api/config", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })).then(() => { shopSavedRevision = Math.max(shopSavedRevision, revision); });
+  configSaveQueue = request;
+  return request.finally(() => {
+    configSavePending -= 1;
+    isSavingConfig = configSavePending > 0;
+    updateShopSelection();
+  });
 }
 
 function scheduleAutoSave() {
-  if (!config || isSavingConfig) return;
+  if (!config) return;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     autoSaveConfig()
@@ -2997,30 +2106,7 @@ async function refreshStatus() {
   $("nextRun").textContent = formatTime(scheduler.next_run);
   $("lastResult").textContent = latestResultText(scheduler, login, logs);
 
-  const runningPlans = new Set(exchangeScheduler.running_plans || []);
-  const runningCount = exchangeScheduler.running_count ?? runningPlans.size;
-  shopRunningProgress = exchangeScheduler.running_progress || {};
-
-
-  if ($("shopScheduleMetric")) {
-    $("shopScheduleMetric").textContent = runningCount > 0
-      ? "兑换中"
-      : exchangeScheduler.enabled
-        ? "已启用"
-        : "已关闭";
-  }
-  if ($("shopNextRun")) {
-    $("shopNextRun").textContent = formatTime(exchangeScheduler.next_run);
-  }
-  if (
-    shopExchange &&
-    config &&
-    !shopRequestInFlight &&
-    !isEditingShopConfig()
-  ) {
-    config.shop_exchange = shopExchange;
-    renderShopConfig();
-  }
+  receiveShopStatus(exchangeScheduler, shopExchange);
   updateLogs(logs);
 
   if (login.running) {
@@ -3037,6 +2123,12 @@ async function refreshStatus() {
     clearLoginCountdown();
     localLoginPanel = null;
     showToast(login.message || "登录成功");
+    // 扫码登录也走同一条路：先让这张卡片的头像失效，重绘时重新取
+    const loginIndex = login.account_index ?? activeLoginIndex;
+    forgetAccountAvatar({
+      stuid: login.account_data?.stuid || accounts[loginIndex]?.stuid,
+      region: login.account_data?.region || accounts[loginIndex]?.region,
+    });
     if (login.draft) {
       applyDraftLogin(login);
       activeLoginIndex = null;
@@ -3052,7 +2144,7 @@ function isEditingShopConfig() {
   const active = document.activeElement;
   return Boolean(
     active?.matches?.(
-      "[data-shop-plan-field], #shopEnable, #shopRetrySeconds, #shopRetryInterval",
+      "#shopEnable, #shopRetrySeconds, #shopRetryInterval, #shopPush",
     ),
   );
 }
@@ -3157,6 +2249,10 @@ function renderLocalLoginPanel(slot, panel) {
       ?.addEventListener("click", resetLoginPanel);
     return;
   }
+  if (panel.mode === "cookie") {
+    renderCookieLoginPanel(slot, panel);
+    return;
+  }
 
   const busy = Boolean(panel.sending || panel.verifying);
   const countdown = Number(panel.countdown || 0);
@@ -3231,6 +2327,154 @@ function renderLocalLoginPanel(slot, panel) {
     ?.addEventListener("click", resetLoginPanel);
 }
 
+// 国际服（HoYoLAB）没有扫码 / 验证码登录，凭证是用户从浏览器里复制的 cookie
+function renderCookieLoginPanel(slot, panel) {
+  const busy = Boolean(panel.verifying);
+  const message = panel.message
+    ? `<p class="login-panel-message ${panel.error ? "error" : ""}" data-login-panel-message>${escapeHtml(panel.message)}</p>`
+    : "";
+  slot.innerHTML = `
+    <div class="inline-login captcha-login-panel cookie-login-panel">
+      <div class="captcha-login-fields">
+        <textarea data-login-cookie="${panel.account_index}" rows="3" spellcheck="false" autocomplete="off" placeholder="ltuid_v2=…; ltoken_v2=…" ${busy ? "disabled" : ""}>${escapeHtml(panel.cookie || "")}</textarea>
+        <p class="login-panel-hint">在浏览器里登录 hoyolab.com，按 F12 打开开发者工具，到「应用（Application）→ Cookie」里找到 ltuid_v2 和 ltoken_v2，连同行头一起复制也可以；复制后点「从剪贴板粘贴」，或直接在输入框里按 Ctrl+V。</p>
+        <p class="login-panel-detect" data-login-detect></p>
+      </div>
+      <div class="captcha-login-actions">
+        <button class="primary" type="button" data-login-submit-cookie="${panel.account_index}" ${busy ? "disabled" : ""}>
+          <svg><use href="#i-save"></use></svg>
+          <span>${busy ? "登录中" : "登录"}</span>
+        </button>
+        <button class="ghost" type="button" data-login-paste-clipboard ${busy ? "disabled" : ""}>从剪贴板粘贴</button>
+        <button class="ghost" type="button" data-login-panel-close ${busy ? "disabled" : ""}>取消</button>
+      </div>
+      ${message}
+    </div>
+  `;
+  slot
+    .querySelector("[data-login-cookie]")
+    ?.addEventListener("input", (event) => {
+      if (localLoginPanel) localLoginPanel.cookie = event.target.value;
+      updateCookieDetect();
+    });
+  slot
+    .querySelector("[data-login-paste-clipboard]")
+    ?.addEventListener("click", () => {
+      readClipboardCookie(panel);
+    });
+  slot
+    .querySelector("[data-login-submit-cookie]")
+    ?.addEventListener("click", () =>
+      submitCookieLogin(panel.account_index).catch((error) =>
+        showToast(error.message),
+      ),
+    );
+  slot
+    .querySelector("[data-login-panel-close]")
+    ?.addEventListener("click", resetLoginPanel);
+  updateCookieDetect();
+}
+
+// 和海外模块的 cookie 解析保持一致：整段请求头、开发者工具表格、JSON、手拼的 name=value
+const HOYOLAB_UID_FIELDS = ["ltuid_v2", "ltuid", "account_id_v2", "account_id"];
+const HOYOLAB_TOKEN_FIELDS = ["ltoken_v2", "ltoken", "cookie_token_v2", "cookie_token"];
+
+function hoyolabCookiePairs(text) {
+  const pairs = new Map();
+  const source = String(text || "").trim();
+  if (!source) return pairs;
+  if (source.startsWith("[") || source.startsWith("{")) {
+    try {
+      const data = JSON.parse(source);
+      const items = Array.isArray(data) ? data : [data];
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        if ("name" in item) pairs.set(String(item.name), String(item.value ?? ""));
+        else if (!Array.isArray(data)) {
+          for (const [name, value] of Object.entries(item)) pairs.set(name, String(value ?? ""));
+        }
+      }
+      if (pairs.size) return pairs;
+    } catch {
+      // 不是 JSON，按普通 cookie 文本继续解析
+    }
+  }
+  const header = source.match(/^\s*cookie\s*[:：]\s*(.+)$/im);
+  for (const line of (header ? header[1] : source).split(/[;\r\n]+/)) {
+    const row = line.trim();
+    if (!row) continue;
+    // 开发者工具里框选 cookie 表格复制出来是「名称\t值\t域\t路径…」
+    const cells = row.split("\t");
+    const pair = cells.length > 1 ? `${cells[0].trim()}=${cells[1].trim()}` : row;
+    const index = pair.indexOf("=");
+    if (index <= 0) continue;
+    const name = pair.slice(0, index).trim();
+    const value = pair.slice(index + 1).trim().replace(/^"(.*)"$/, "$1").trim();
+    if (value && /^[A-Za-z0-9_.-]+$/.test(name)) pairs.set(name, value);
+  }
+  return pairs;
+}
+
+function describeHoyolabCookie(text) {
+  const pairs = hoyolabCookiePairs(text);
+  const uidField = HOYOLAB_UID_FIELDS.find((name) => pairs.get(name)) || "";
+  // 只回报命中的字段名，不把 token 的值显示到页面上
+  return {
+    uid: uidField ? pairs.get(uidField) : "",
+    token: HOYOLAB_TOKEN_FIELDS.find((name) => pairs.get(name)) || "",
+  };
+}
+
+function setCookieDetect(text, state) {
+  const node = document.querySelector("[data-login-detect]");
+  if (!node) return;
+  node.textContent = text;
+  if (state) node.dataset.state = state;
+  else delete node.dataset.state;
+}
+
+// 粘贴后立刻告诉用户解析到了什么，不用等签到才发现 cookie 少了一项
+function updateCookieDetect() {
+  const textarea = document.querySelector("[data-login-cookie]");
+  if (!textarea) return;
+  if (!textarea.value.trim()) {
+    setCookieDetect("");
+    return;
+  }
+  const { uid, token } = describeHoyolabCookie(textarea.value);
+  if (uid && token) {
+    setCookieDetect(`已识别 UID ${uid}，凭证 ${token}`, "ok");
+  } else if (uid) {
+    setCookieDetect(`已识别 UID ${uid}，但没有找到 ltoken_v2`, "warn");
+  } else if (token) {
+    setCookieDetect("已找到 token，但没有找到 ltuid_v2", "warn");
+  } else {
+    setCookieDetect("还没有识别到 ltuid_v2 / ltoken_v2", "warn");
+  }
+}
+
+async function readClipboardCookie(panel) {
+  let text = "";
+  try {
+    // 本地控制台（127.0.0.1 / localhost）属于安全上下文，浏览器会放行；换域名访问时可能被拒
+    text = await navigator.clipboard.readText();
+  } catch {
+    setCookieDetect("浏览器不允许读取剪贴板，请点一下输入框再按 Ctrl+V 粘贴", "error");
+    return;
+  }
+  if (!text.trim()) {
+    setCookieDetect("剪贴板是空的，请先在浏览器里复制 HoYoLAB 的 cookie", "error");
+    return;
+  }
+  const textarea = document.querySelector(`[data-login-cookie="${panel.account_index}"]`);
+  if (!textarea) return;
+  textarea.value = text.trim();
+  panel.cookie = textarea.value;
+  if (localLoginPanel) localLoginPanel.cookie = panel.cookie;
+  textarea.focus();
+  updateCookieDetect();
+}
+
 function updateLogs(logs) {
   const logBox = $("logs");
   const wasPinned = logsPinnedToBottom || isScrolledNearBottom(logBox);
@@ -3259,6 +2503,11 @@ async function showLoginMethods(accountIndex) {
   if (!account) {
     throw new Error("请先添加账号");
   }
+  // 国际服只有粘贴 cookie 一种登录方式，不需要先选
+  if (isOverseas(account)) {
+    showCookieLogin(accountIndex);
+    return;
+  }
   clearLoginCountdown();
   lastLoginStatus = "";
   activeLoginIndex = accountIndex;
@@ -3281,6 +2530,21 @@ function showCaptchaLogin(accountIndex) {
   activeLoginIndex = accountIndex;
   renderLoginSlot({ running: false, status: "idle" }, { forceLocal: true });
   document.querySelector(`[data-login-phone="${accountIndex}"]`)?.focus();
+}
+
+function showCookieLogin(accountIndex) {
+  clearLoginCountdown();
+  lastLoginStatus = "";
+  localLoginPanel = {
+    account_index: accountIndex,
+    mode: "cookie",
+    cookie: "",
+    message: "",
+    error: false,
+  };
+  activeLoginIndex = accountIndex;
+  renderLoginSlot({ running: false, status: "idle" }, { forceLocal: true });
+  document.querySelector(`[data-login-cookie="${accountIndex}"]`)?.focus();
 }
 
 function resetLoginPanel() {
@@ -3593,6 +2857,10 @@ async function submitCaptchaLogin(accountIndex) {
     localLoginPanel = null;
     activeLoginIndex = null;
     showToast(response.message || "登录成功");
+    forgetAccountAvatar({
+      stuid: response.account_data?.stuid || account.stuid,
+      region: account.region,
+    });
     if (response.draft) {
       applyDraftLogin(response);
     } else {
@@ -3611,6 +2879,58 @@ async function submitCaptchaLogin(accountIndex) {
     panel.verifying = false;
     panel.error = true;
     panel.message = error.message || "验证码登录失败";
+    renderLoginSlot({ running: false, status: "idle" }, { forceLocal: true });
+    throw error;
+  }
+}
+
+async function submitCookieLogin(accountIndex) {
+  collectConfig();
+  const account = config.accounts[accountIndex];
+  const panel = localLoginPanel;
+  if (!account || !panel || panel.account_index !== accountIndex) {
+    throw new Error("请先选择登录方式");
+  }
+  panel.cookie = String(
+    document.querySelector(`[data-login-cookie="${accountIndex}"]`)?.value ??
+      panel.cookie ??
+      "",
+  ).trim();
+  if (!panel.cookie) {
+    throw new Error("请粘贴 HoYoLAB 的 cookie");
+  }
+  panel.verifying = true;
+  panel.error = false;
+  panel.message = "正在登录";
+  renderLoginSlot({ running: false, status: "idle" }, { forceLocal: true });
+  try {
+    const response = await api("/api/login/cookie", {
+      method: "POST",
+      body: JSON.stringify({
+        account_index: accountIndex,
+        cookie: panel.cookie,
+        draft: Boolean(account._draft),
+        account: stripClientAccount(account),
+      }),
+    });
+    localLoginPanel = null;
+    activeLoginIndex = null;
+    showToast(response.message || "登录成功");
+    // 先清掉旧头像，下面的重绘会把新账号的头像重新取回来
+    forgetAccountAvatar({
+      stuid: response.account_data?.stuid || account.stuid,
+      region: response.account_data?.region || account.region,
+    });
+    if (response.draft) {
+      applyDraftLogin(response);
+    } else {
+      await loadConfig();
+    }
+    renderLoginSlot({ running: false, status: "idle" });
+  } catch (error) {
+    panel.verifying = false;
+    panel.error = true;
+    panel.message = error.message || "Cookie 登录失败";
     renderLoginSlot({ running: false, status: "idle" }, { forceLocal: true });
     throw error;
   }
@@ -3686,6 +3006,7 @@ function addAccount() {
 function emptyAccount(name) {
   return {
     name,
+    region: "cn",
     cookie: "",
     stuid: "",
     stoken: "",
@@ -3728,6 +3049,7 @@ function applyDraftLogin(login) {
     stuid: accountData.stuid || "",
     stoken: accountData.stoken || "",
     mid: accountData.mid || "",
+    region: accountData.region || account.region || "cn",
     _draft: true,
   });
   editingAccountIndex = index;
@@ -3828,7 +3150,8 @@ function switchView(view) {
       actions.dataset.viewActions !== activeView,
     );
   });
-  if (activeView === "shop" && !shopGoods.length) {
+  if (activeView === "shop") renderShopPlans(false);
+  if (activeView === "shop" && !shopGoods.length && !shopGoodsLoading) {
     loadShopGoods().catch((error) => showToast(error.message));
   }
   scheduleLogFit();
@@ -3954,16 +3277,261 @@ function injectArrowSymbol() {
   document.body.prepend(svg);
 }
 
+// ---------------------------------------------------------------------------
+// 设备信息
+// ---------------------------------------------------------------------------
+const DEVICE_FP_TAGS = {
+  server: { tone: "ok", label: "服务器签发" },
+  imported: { tone: "ok", label: "真机导入" },
+};
+
+async function loadDevice() {
+  try {
+    deviceInfo = await api("/api/device");
+    deviceError = "";
+  } catch (error) {
+    deviceError = `设备信息读取失败：${error.message}`;
+  }
+  renderDevicePanel();
+}
+
+function deviceFpTag(info) {
+  if (!info.fp) return { tone: "warn", label: "未获取" };
+  return DEVICE_FP_TAGS[info.fp_source] || { tone: "warn", label: "来源不明" };
+}
+
+function formatDeviceTime(seconds) {
+  const value = Number(seconds);
+  if (!value) return "";
+  const date = new Date(value * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function deviceFpNote(info) {
+  if (!info.fp) {
+    return "还没有 device_fp：请求里不会带 x-rpc-device_fp（不会拿随机值冒充），可点「向服务器申请」，或在下方导入真机的。";
+  }
+  if (!info.trusted_fp) {
+    return "这枚 device_fp 来源不明（多半是旧版本随机生成的），下次任务会向服务器重新申请并替换；如果它是你自己填的真机值，请改用下方「导入」保留。";
+  }
+  const when = formatDeviceTime(info.fp_time);
+  return when ? `device_fp 取得于 ${when}。` : "";
+}
+
+function renderDevicePanel() {
+  const host = $("devicePanel");
+  if (!host) return;
+  const info = deviceInfo;
+  if (!info) {
+    host.innerHTML = `<p class="task-note">${escapeHtml(deviceError || "正在读取设备信息…")}</p>`;
+    return;
+  }
+  const tag = deviceFpTag(info);
+  const disabled = deviceBusy ? "disabled" : "";
+  const label = (task, idle, busy) => (deviceBusy === task ? busy : idle);
+  const system = info.os_version
+    ? `Android ${escapeHtml(info.os_version)}${info.sdk ? ` · SDK ${escapeHtml(info.sdk)}` : ""}`
+    : "-";
+  host.innerHTML = `
+    <div class="device-facts">
+      <div class="device-fact">
+        <span>设备</span>
+        <div>
+          <strong>${escapeHtml(info.name || info.model || "-")}</strong>
+          <em class="device-tag">${info.source === "imported" ? "真机导入" : "预设机型"}</em>
+          ${info.has_ua ? '<em class="device-tag ok">含真机 UA</em>' : ""}
+        </div>
+      </div>
+      <div class="device-fact"><span>系统</span><div>${system}</div></div>
+      <div class="device-fact"><span>device_id</span><code>${escapeHtml(info.id || "-")}</code></div>
+      <div class="device-fact">
+        <span>device_fp</span>
+        <div>
+          <code>${escapeHtml(info.fp || "-")}</code>
+          <em class="device-tag ${tag.tone}">${tag.label}</em>
+        </div>
+      </div>
+    </div>
+    <p class="task-note">${escapeHtml(deviceFpNote(info))}</p>
+    <div class="device-actions">
+      <button class="ghost" type="button" data-device-action="fp" ${disabled}>
+        <svg><use href="#i-refresh"></use></svg>
+        <span>${label("fp", "向服务器申请 fp", "申请中…")}</span>
+      </button>
+      <button class="ghost" type="button" data-device-action="reset" ${disabled}>
+        <svg><use href="#i-phone"></use></svg>
+        <span>${label("reset", "换一台虚拟设备", "生成中…")}</span>
+      </button>
+    </div>
+    <label class="device-import">
+      <span>导入真机信息</span>
+      <textarea
+        id="deviceImportText"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="粘贴米游社 App 请求的整段请求头、Copy as cURL，或含 device_id / device_fp 的 JSON"
+      >${escapeHtml(deviceImportDraft)}</textarea>
+    </label>
+    <p class="task-note">导入的 device_id、机型、系统版本、UA 会优先于预设使用；其中的 device_fp 视为可信，不会被覆盖。</p>
+    <div class="device-actions">
+      <button class="primary" type="button" data-device-action="import" ${disabled}>
+        <svg><use href="#i-save"></use></svg>
+        <span>${label("import", "导入", "导入中…")}</span>
+      </button>
+    </div>
+  `;
+}
+
+// 同一时间只做一件事；面板整块重绘，导入框里没提交的文字存在 deviceImportDraft 里
+async function runDeviceAction(task, work) {
+  if (deviceBusy) return;
+  deviceBusy = task;
+  renderDevicePanel();
+  try {
+    await work();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    deviceBusy = "";
+    renderDevicePanel();
+  }
+}
+
+function requestDeviceFp() {
+  return runDeviceAction("fp", async () => {
+    const data = await api("/api/device/fp", { method: "POST", body: "{}" });
+    deviceInfo = data.device;
+    showToast("已向服务器申请到新的 device_fp");
+  });
+}
+
+function importDeviceInfo() {
+  const text = deviceImportDraft.trim();
+  if (!text) {
+    showToast("先粘贴要导入的内容");
+    return Promise.resolve();
+  }
+  return runDeviceAction("import", async () => {
+    const data = await api("/api/device/import", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    deviceInfo = data.device;
+    deviceImportDraft = "";
+    const changed = data.changed || [];
+    showToast(changed.length ? `已导入：${changed.join("、")}` : "导入的内容与当前设备一致，没有变化");
+  });
+}
+
+async function resetDevice() {
+  const model = await chooseDeviceResetModel();
+  if (model === null) return;
+  await runDeviceAction("reset", async () => {
+    const data = await api("/api/device/reset", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+    deviceInfo = data.device;
+    renderDevicePanel();
+    // 新设备没有 fp，顺手申请；失败也不回滚，下次任务会再试
+    try {
+      const issued = await api("/api/device/fp", { method: "POST", body: "{}" });
+      deviceInfo = issued.device;
+      showToast(`已换成 ${deviceInfo.name}，并取得新的 device_fp`);
+    } catch (error) {
+      showToast(`已换成 ${deviceInfo.name}，但 device_fp 申请失败：${error.message}`);
+    }
+  });
+}
+
+// 选一台预设机型（空字符串 = 随机）；取消返回 null
+function chooseDeviceResetModel() {
+  const presets = deviceInfo?.presets || [];
+  const current = deviceInfo?.model || "";
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="deviceResetTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="deviceResetTitle">换一台虚拟设备</h2>
+            <p>会生成新的 device_id，旧的 device_fp 作废并重新申请；账号凭证不会被清除。</p>
+          </div>
+          <button class="ghost icon-only" type="button" data-modal-cancel title="关闭">
+            <svg><use href="#i-x"></use></svg>
+          </button>
+        </div>
+        <label>
+          <span>机型</span>
+          <div class="select-wrapper">
+            <select id="deviceResetModel">
+              <option value="">随机（从预设中任选）</option>
+              ${presets
+                .map(
+                  (preset) =>
+                    `<option value="${escapeAttr(preset.model)}">${escapeHtml(preset.label)}（Android ${escapeHtml(preset.os_version)}）${preset.model === current ? " · 当前" : ""}</option>`,
+                )
+                .join("")}
+            </select>
+            <svg class="select-arrow" width="12" height="8" aria-hidden="true">
+              <use href="#arrow-down"/>
+            </svg>
+          </div>
+        </label>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-modal-cancel>取消</button>
+          <button class="primary" type="button" data-modal-confirm>
+            <svg><use href="#i-phone"></use></svg>
+            <span>确认更换</span>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.insertBefore(overlay, document.querySelector(".toast"));
+    const select = overlay.querySelector("#deviceResetModel");
+    const finish = (value) => {
+      overlay.remove();
+      resolve(value);
+    };
+    overlay.querySelectorAll("[data-modal-cancel]").forEach((control) => {
+      control.addEventListener("click", () => finish(null));
+    });
+    overlay
+      .querySelector("[data-modal-confirm]")
+      ?.addEventListener("click", () => finish(select.value));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) finish(null);
+    });
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") finish(null);
+    });
+    select.focus();
+  });
+}
+
+function bindDeviceEvents() {
+  document.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-device-action]");
+    if (!button || button.disabled) return;
+    const action = button.dataset.deviceAction;
+    if (action === "fp") requestDeviceFp();
+    else if (action === "import") importDeviceInfo();
+    else if (action === "reset") resetDevice();
+  });
+  document.addEventListener("input", (event) => {
+    if (event.target?.id === "deviceImportText") deviceImportDraft = event.target.value;
+  });
+}
+
 function bindEvents() {
+  bindDeviceEvents();
   document.querySelectorAll("summary button, summary input")
       .forEach((control) => {
         control.addEventListener("click", (event) => event.stopPropagation());
       });
-  $("shopStatusFilter")?.addEventListener("change", (event) => {
-    shopFilterStatus = event.target.value;
-    shopCurrentPage = 1;
-    renderShopGoods();
-  });
+  bindShopEvents();
   document.addEventListener("change", (event) => {
     if (event.target?.matches?.("[data-autosave]")) {
       scheduleAutoSave();
@@ -3992,12 +3560,7 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
-  $("shopRefreshBtn")?.addEventListener("click", () =>
-      loadShopGoods().catch((error) => showToast(error.message)),
-  );
-  $("shopGameFilter")?.addEventListener("change", () =>
-      loadShopGoods().catch((error) => showToast(error.message)),
-  );
+
 }
 
 bindEvents();
@@ -4109,6 +3672,7 @@ function startApp() {
       }
       showToast(error.message);
     });
+  setInterval(updateShopCountdowns, 1000);
   setInterval(() => {
     refreshStatus().catch((error) => {
       if (isAuthError(error)) {

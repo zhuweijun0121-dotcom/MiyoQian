@@ -24,24 +24,30 @@ import qrcode
 
 from ..auth.login import AigisRequired, CaptchaLogin, QRLogin, _QrRefreshed
 from ..core import cookies
+from ..core import device as devicelib
 from ..core.config import (
     PUSH_CHANNEL_DEFAULTS,
     PUSH_CHANNEL_FIELDS,
     bind_shop_plan_accounts,
     find_account_index_by_stuid,
+    find_shop_plan,
     load_config,
     log_path,
     normalize_config,
     normalize_push_channels,
+    preserve_shop_plan_runtime,
     save_config,
     validate_unique_account_uids,
 )
 from ..core.http import ApiClient
 from ..core.logs import append_log, configure_logger, format_line, print_startup_banner
-from ..core.profile import fetch_avatar_url
+from ..core.profile import fetch_avatar_url, fetch_os_avatar_url
 from ..core.qq_bot import bind_openid as bind_qq_openid
 from ..core.qq_bot import generate_verify_code
-from ..tasks.shop_exchange import ShopExchange
+from ..core.region import REGION_CN, REGION_OS, account_region
+from ..overseas.checkin import probe_hoyolab_cookie
+from ..overseas.cookie import parse_hoyolab_cookie
+from ..tasks.shop_exchange import BJT, ShopExchange
 from .exchange_scheduler import ExchangeScheduler
 from .notifier import send_push, send_task_push, send_exchange_push, push_channels
 from .runner import run_tasks
@@ -83,6 +89,17 @@ def check_password(password: str, stored_hash: str) -> bool:
 
 def is_external_host(host: str) -> bool:
     return host not in ("127.0.0.1", "localhost", "::1")
+
+
+# 兑换失败后读取下次开抢时间的尝试次数（两次之间隔 1 秒）
+NEXT_TIME_LOOKUP_TRIES = 3
+
+
+def summarize_exchange_result(result: dict[str, Any]) -> str:
+    """写进计划 last_result 的一句话。执行本身出了异常时没有 retcode，直接用异常说明。"""
+    if result.get("error"):
+        return str(result.get("message") or "异常")
+    return f"{result.get('message', '未知结果')}({result.get('retcode')})，请求 {result.get('attempt', 1)} 次"
 
 
 class WebApp:
@@ -261,8 +278,13 @@ class WebApp:
         with self.lock:
             old_config = copy.deepcopy(self.config)
             preserve_push_channel_secrets(old_config, payload)
+            preserve_shop_plan_runtime(old_config, payload)
+            # 设备档案只通过「设备信息」的专用接口改；页面里那份可能是旧的，
+            # 照单全收会把刚申请到的 device_fp 覆盖掉
+            payload["device"] = copy.deepcopy(old_config["device"])
             normalize_config(payload)
             bind_shop_plan_accounts(payload)
+            self._guard_running_plans(old_config, payload)
             changes = diff_config(old_config, payload)
             self.config = payload
             save_config(self.config_path, self.config)
@@ -286,22 +308,43 @@ class WebApp:
         else:
             self.log("配置已保存，未检测到配置项变化", "config")
 
-    def account_avatars(self, uids: list[str]) -> dict[str, Any]:
-        """账号在米游社的头像地址。纯展示用，取不到的账号不出现在结果里，页面继续用默认头像。"""
-        uids = list(dict.fromkeys(uid for uid in uids if uid.isascii() and uid.isdigit() and len(uid) <= 20))
-        uids = uids[:AVATAR_MAX_UIDS]
+    def _guard_running_plans(self, old_config: dict[str, Any], payload: dict[str, Any]) -> None:
+        """正在兑换的计划不能删，也不能改会影响这次请求的字段（页面也会拦，这里兜底旧页面）。"""
+        guarded = ("goods_id", "exchange_at", "account_stuid", "address_id", "uid", "region", "game_biz")
+        new_plans = {plan.get("id"): plan for plan in (payload.get("shop_exchange") or {}).get("plans") or []}
+        for plan_id in self.exchange_scheduler.status().get("running_plans", []):
+            old = find_shop_plan(old_config, plan_id)
+            if old is None:
+                continue
+            new = new_plans.get(plan_id)
+            if new is None:
+                raise ValueError("该兑换计划正在执行，暂不能删除")
+            if any(old.get(key) != new.get(key) for key in guarded):
+                raise ValueError("该兑换计划正在执行，暂不能修改")
+
+    def account_avatars(self, keys: list[str]) -> dict[str, Any]:
+        """账号头像地址。键写成 uid（国服）或 os:uid（国际服），两边的 UID 可能撞号。
+
+        纯展示用，取不到的账号不出现在结果里，页面继续用默认头像。
+        """
+        keys = list(dict.fromkeys(key for key in map(parse_avatar_key, keys) if key))
+        keys = keys[:AVATAR_MAX_UIDS]
         now = time.monotonic()
         with self.lock:
-            cached = {uid: self._avatar_cache[uid] for uid in uids if uid in self._avatar_cache}
-        pending = [uid for uid in uids if uid not in cached or cached[uid][0] <= now]
+            cached = {key: self._avatar_cache[key] for key in keys if key in self._avatar_cache}
+        pending = [key for key in keys if key not in cached or cached[key][0] <= now]
         fresh: dict[str, tuple[float, str]] = {}
         if pending:
-            def lookup(uid: str) -> tuple[str, tuple[float, str]]:
+            def lookup(key: str) -> tuple[str, tuple[float, str]]:
+                region, sep, uid = key.partition(":")
+                if not sep:
+                    region, uid = REGION_CN, key
+                fetch = fetch_os_avatar_url if region == REGION_OS else fetch_avatar_url
                 try:
-                    return uid, (now + AVATAR_CACHE_SECONDS, fetch_avatar_url(client, uid))
+                    return key, (now + AVATAR_CACHE_SECONDS, fetch(client, uid))
                 except Exception as exc:
-                    self.log(f"账号头像获取失败: {uid}，{exc}", "web")
-                    return uid, (now + AVATAR_RETRY_SECONDS, "")
+                    self.log(f"账号头像获取失败: {key}，{exc}", "web")
+                    return key, (now + AVATAR_RETRY_SECONDS, "")
 
             # 网络差时单个请求可能要等很久（比如 IPv6 不通要先等超时），并发取免得账号越多越慢
             with ApiClient(timeout=8.0) as client, ThreadPoolExecutor(max_workers=min(len(pending), 5)) as pool:
@@ -309,7 +352,7 @@ class WebApp:
             with self.lock:
                 self._avatar_cache.update(fresh)
         known = {**cached, **fresh}
-        return {"avatars": {uid: known[uid][1] for uid in uids if known[uid][1]}}
+        return {"avatars": {key: known[key][1] for key in keys if known[key][1]}}
 
     def shop_goods(self, game: str = "") -> dict[str, Any]:
         game_label = game or "全部分区"
@@ -339,24 +382,76 @@ class WebApp:
         self.log(f"商品详情获取完成: {result.get('goods_name') or goods_id}", "exchange")
         return result
 
+    def ensure_device_fp(
+        self, client: ApiClient, force: bool = False, component: str = "device"
+    ) -> tuple[bool, str]:
+        """保证设备档案里有可信的 device_fp，新申请到的立刻落盘。返回 (是否可信, 失败原因)。"""
+        with self.lock:
+            device = self.config["device"]
+        before = (devicelib.effective_fp(device), device.get("fp_source"))
+        ok, reason = devicelib.ensure_device_fp(
+            client, device, force=force, emit=lambda message: self.log(message, component)
+        )
+        if (devicelib.effective_fp(device), device.get("fp_source")) != before:
+            with self.lock:
+                live = self.config["device"]
+                # 申请期间页面刚好保存过配置时 self.config 已经换了一份，把结果同步过去
+                if live is not device and live.get("id") == device.get("id"):
+                    live.update({key: device[key] for key in ("fp", "fp_source", "fp_time")})
+                save_config(self.config_path, self.config)
+        return ok, reason
+
     def ensure_shop_device_fp(self) -> dict[str, Any]:
+        """兑换计划用的 device_fp：和其它请求共用设备档案里那一枚，不再单独申请、覆盖。"""
         self.log("开始预获取商品兑换 device_fp", "exchange")
+        with ApiClient(timeout=20.0) as client:
+            ok, reason = self.ensure_device_fp(client, component="exchange")
         with self.lock:
-            config = copy.deepcopy(self.config)
-        try:
-            with ApiClient(timeout=20.0) as client:
-                device_fp = ShopExchange(client, config).fetch_device_fp()
-        except Exception as exc:
-            self.log(f"商品兑换 device_fp 获取失败: {exc}", "exchange")
-            raise
-        with self.lock:
-            self.config.setdefault("device", {})["fp"] = device_fp
-            save_config(self.config_path, self.config)
+            device_fp = devicelib.effective_fp(self.config["device"])
+        if not device_fp:
+            self.log(f"商品兑换 device_fp 获取失败: {reason}", "exchange")
+            raise RuntimeError(f"device_fp 获取失败: {reason}。可以在「设备信息」里导入真机的 device_fp")
+        if not ok:
+            self.log(f"向服务器申请 device_fp 失败（{reason}），先沿用已有的", "exchange")
         self.log("已预获取商品兑换 device_fp", "exchange")
         return {"device_fp": device_fp}
 
+    def device_info(self) -> dict[str, Any]:
+        with self.lock:
+            return devicelib.device_view(self.config["device"])
+
+    def import_device(self, text: str) -> dict[str, Any]:
+        parsed = devicelib.parse_device_import(text)
+        with self.lock:
+            changed = devicelib.apply_device_import(self.config["device"], parsed)
+            if changed:
+                save_config(self.config_path, self.config)
+            view = devicelib.device_view(self.config["device"])
+        if changed:
+            self.log(f"已导入设备信息: {'、'.join(changed)}", "device")
+        return {"changed": changed, "device": view}
+
+    def issue_device_fp(self) -> dict[str, Any]:
+        """手动向服务器重新申请 device_fp。"""
+        self.log("开始向服务器申请 device_fp", "device")
+        with ApiClient(timeout=20.0) as client:
+            ok, reason = self.ensure_device_fp(client, force=True)
+        if not ok:
+            raise RuntimeError(f"申请失败: {reason}")
+        return {"device": self.device_info()}
+
+    def reset_device(self, model: str = "") -> dict[str, Any]:
+        """换一台全新的虚拟设备（新 device_id，旧 fp 作废）。"""
+        with self.lock:
+            devicelib.reset_device(self.config["device"], model)
+            save_config(self.config_path, self.config)
+            view = devicelib.device_view(self.config["device"])
+        self.log(f"已重新生成虚拟设备: {view['name']}", "device")
+        return {"device": view}
+
     def shop_account_meta(self, account_index: int, game_biz: str = "") -> dict[str, Any]:
         account = self._account_by_index(account_index)
+        cookie_before = str(account.get("cookie") or "")
         account_name = display_account_name(account)
         self.log(f"开始获取兑换账号信息: {account_name}，game_biz={game_biz or '无'}", "exchange")
         with self.lock:
@@ -374,6 +469,7 @@ class WebApp:
             except Exception as exc:
                 result["addresses_error"] = str(exc)
                 self.log(f"收货地址获取失败: {account_name}，{exc}", "exchange")
+            self._keep_refreshed_cookie(account, cookie_before)
             if game_biz:
                 try:
                     result["roles"] = shop.roles(game_biz)
@@ -389,14 +485,15 @@ class WebApp:
 
     def shop_exchange_once(self, plan: dict[str, Any], on_progress: Callable[[int, str], None] | None = None) -> dict[str, Any]:
         account = self._account_by_index(self._plan_account_index(plan))
+        cookie_before = str(account.get("cookie") or "")
         account_name = display_account_name(account)
         goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
         log_prefix = f"【账号 {account_name}｜商品 {goods_name}】"
         self.log(f"{log_prefix}开始商品兑换", "exchange")
-        if not str(plan.get("device_fp") or "").strip():
-            raise ValueError("兑换计划缺少 device_fp，请重新添加计划")
         with self.lock:
             config = copy.deepcopy(self.config)
+        if not str(plan.get("device_fp") or "").strip() and not devicelib.effective_fp(config["device"]):
+            raise ValueError("兑换计划缺少 device_fp，请先在「设备信息」里申请或导入")
         try:
             with ApiClient(timeout=15.0) as client:
                 result = ShopExchange(
@@ -408,108 +505,152 @@ class WebApp:
         except Exception as exc:
             self.log(f"{log_prefix}商品兑换请求异常: {exc}", "exchange")
             raise
+        finally:
+            self._keep_refreshed_cookie(account, cookie_before)
         summary = f"{result.get('message', '未知结果')}({result.get('retcode')})，请求 {result.get('attempt', 1)} 次"
         self.log(f"{log_prefix}商品兑换结束: {summary}", "exchange")
         return result
 
-    def shop_exchange_plan_once(self, plan_index: int) -> dict[str, Any]:
-        with self.lock:
-            plans = self.config.get("shop_exchange", {}).get("plans") or []
-            shop_config = self.config.get("shop_exchange", {})
-            if plan_index < 0 or plan_index >= len(plans):
-                raise ValueError("兑换计划不存在")
-            plan = copy.deepcopy(plans[plan_index])
-            goods_name = plan.get("goods_name") or plan.get("goods_id")
-        self.log(f"开始手动执行商品兑换计划 {plan_index + 1}: {goods_name}", "exchange")
-        self.exchange_scheduler.update_progress(plan_index, attempt=0, message="准备兑换")
+    def shop_exchange_plan_once(self, plan_id: str) -> dict[str, Any]:
+        """手动执行一个已保存的计划。"""
+        return self._execute_plan(plan_id, manual=True)
+
+    def run_shop_exchange_plan(self, plan_id: str) -> None:
+        """调度器到点触发的入口。"""
+        self._execute_plan(plan_id, manual=False)
+
+    def shop_exchange_adhoc(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """不保存计划的一次性兑换（商品列表里的「兑换」）。
+        进度挂在临时 key 上，界面同样能看到第几次尝试。"""
+        goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
+        key = f"adhoc:{plan.get('goods_id', '')}:{plan.get('account_stuid') or plan.get('account_index', 0)}"
+        if not self.exchange_scheduler.begin(key, goods_name):
+            raise ValueError("该商品正在兑换中，请稍候")
         try:
             result = self.shop_exchange_once(
                 plan,
                 on_progress=lambda attempt, msg: self.exchange_scheduler.update_progress(
-                    plan_index, attempt=attempt, message=msg
+                    key, attempt=attempt, message=msg
                 ),
             )
-        except Exception as exc:
-            summary = f"异常: {exc}"
-            with self.lock:
-                plans = self.config.get("shop_exchange", {}).get("plans") or []
-                if plan_index < len(plans):
-                    plans[plan_index]["last_result"] = summary
-                    plans[plan_index]["last_run"] = datetime.now().isoformat(timespec="seconds")
-                    plans[plan_index]["last_attempt_key"] = f"manual:{datetime.now().isoformat(timespec='seconds')}"
-                    save_config(self.config_path, self.config)
-                    self.exchange_scheduler.reload(self.config)
-            if shop_config.get("push", False):
-                self._send_exchange_push(goods_name, {"ok": False, "message": summary}, plan)
-            raise
         finally:
-            self.exchange_scheduler.clear_progress(plan_index)
-        summary = f"{result.get('message', '未知结果')}({result.get('retcode')})，请求 {result.get('attempt', 1)} 次"
+            self.exchange_scheduler.end(key)
         with self.lock:
-            plans = self.config.get("shop_exchange", {}).get("plans") or []
-            if plan_index < len(plans):
-                plans[plan_index]["last_result"] = summary
-                plans[plan_index]["last_run"] = datetime.now().isoformat(timespec="seconds")
-                plans[plan_index]["last_attempt_key"] = f"manual:{datetime.now().isoformat(timespec='seconds')}"
-                if result.get("ok"):
-                    plans[plan_index]["enable"] = False
-                save_config(self.config_path, self.config)
-                self.exchange_scheduler.reload(self.config)
-        self.log(f"手动商品兑换计划完成 {plan_index + 1}: {goods_name}，{summary}", "exchange")
-
-        # 发送兑换结果推送
-        if shop_config.get("push", False):
+            push = bool(self.config.get("shop_exchange", {}).get("push", False))
+        if push:
             self._send_exchange_push(goods_name, result, plan)
-
         return result
 
-    def run_shop_exchange_plan(self, plan_index: int) -> None:
-        with self.lock:
-            plans = self.config.get("shop_exchange", {}).get("plans") or []
-            shop_config = self.config.get("shop_exchange", {})
-            if plan_index < 0 or plan_index >= len(plans):
-                raise ValueError("兑换计划不存在")
-            plan = copy.deepcopy(plans[plan_index])
-            goods_name = plan.get("goods_name") or plan.get("goods_id")
-            exchange_at = int(plan.get("exchange_at") or 0)
-            plans[plan_index]["last_attempt_key"] = f"{plan.get('goods_id', '')}:{exchange_at}"
-            plans[plan_index]["last_run"] = datetime.now().isoformat(timespec="seconds")
-            save_config(self.config_path, self.config)
-        self.log(f"开始执行商品兑换计划: {goods_name}", "exchange")
-        try:
-            result = self.shop_exchange_once(
-                plan,
-                on_progress=lambda attempt, msg: self.exchange_scheduler.update_progress(
-                    plan_index, attempt=attempt, message=msg
-                ),
-            )
-        except Exception as exc:
-            summary = f"异常: {exc}"
-            with self.lock:
-                plans = self.config.get("shop_exchange", {}).get("plans") or []
-                if plan_index < len(plans):
-                    plans[plan_index]["last_result"] = summary
-                    plans[plan_index]["last_run"] = datetime.now().isoformat(timespec="seconds")
-                    save_config(self.config_path, self.config)
-            self.exchange_scheduler.reload(self.config) # 移出锁外,防止嵌套等待
-            if shop_config.get("push", False):
-                self._send_exchange_push(goods_name, {"ok": False, "message": summary, "attempt": 0}, plan)
-            raise
-        summary = f"{result.get('message', '未知结果')}({result.get('retcode')})，请求 {result.get('attempt', 1)} 次"
-        with self.lock:
-            plans = self.config.get("shop_exchange", {}).get("plans") or []
-            if plan_index < len(plans):
-                plans[plan_index]["last_result"] = summary
-                plans[plan_index]["last_run"] = datetime.now().isoformat(timespec="seconds")
-                if result.get("ok"):
-                    plans[plan_index]["enable"] = False
-                save_config(self.config_path, self.config)
-        self.exchange_scheduler.reload(self.config) #同上
-        self.log(f"商品兑换计划完成: {goods_name}，{summary}", "exchange")
+    def _scheduled_run_allowed(self, plan: dict[str, Any]) -> bool:
+        shop = self.config.get("shop_exchange") or {}
+        if not shop.get("enable") or plan.get("enable") is False or plan.get("auto") is False:
+            return False
+        # 调度器按服务器时间校准后触发，本机时钟可能快慢几秒；差得远说明时间已被改到之后，
+        # 这次旧触发不该去消耗新的一轮
+        return int(plan.get("exchange_at") or 0) - time.time() <= 300
 
-        # 发送兑换结果推送
-        if shop_config.get("push", False):
+    def _execute_plan(self, plan_id: str, *, manual: bool) -> dict[str, Any]:
+        """定时触发和手动执行共用：登记进度 → 兑换 → 按 id 写回结果 → 推送。
+
+        结果一律按 id 写回：兑换要等好几秒，期间页面可能删了、排序了别的计划，
+        按下标写回会把结果记到别的计划头上。"""
+        with self.lock:
+            live = find_shop_plan(self.config, plan_id)
+            if live is None:
+                raise ValueError("兑换计划不存在")
+            plan = copy.deepcopy(live)
+            goods_name = str(plan.get("goods_name") or plan.get("goods_id") or "未知商品")
+            push = bool(self.config.get("shop_exchange", {}).get("push", False))
+            if not manual and not self._scheduled_run_allowed(live):
+                self.log(f"计划已暂停或改期，跳过本次定时兑换: {goods_name}", "exchange")
+                return {"ok": False, "skipped": True, "message": "计划已暂停或改期"}
+            # 定时触发和手动执行（或连点两次）不能同时下单
+            if not self.exchange_scheduler.begin(plan_id, goods_name):
+                raise ValueError("该计划正在兑换中，请稍候")
+        error: Exception | None = None
+        try:
+            if not manual:
+                # 先打上「已尝试」标记，调度器重载时才不会把同一个时间点再排一次
+                with self.lock:
+                    live = find_shop_plan(self.config, plan_id)
+                    if live is not None:
+                        exchange_at = int(live.get("exchange_at") or 0)
+                        live["last_attempt_key"] = f"{live.get('goods_id', '')}:{exchange_at}"
+                        live["last_run"] = datetime.now().isoformat(timespec="seconds")
+                        save_config(self.config_path, self.config)
+            self.log(f"开始{'手动' if manual else ''}执行商品兑换计划: {goods_name}", "exchange")
+            try:
+                result = self.shop_exchange_once(
+                    plan,
+                    on_progress=lambda attempt, msg: self.exchange_scheduler.update_progress(
+                        plan_id, attempt=attempt, message=msg
+                    ),
+                )
+            except Exception as exc:
+                error = exc
+                result = {"ok": False, "retcode": None, "message": f"异常: {exc}", "attempt": 0, "error": True}
+            next_at = 0
+            if not manual and not result.get("ok") and not result.get("error"):
+                # 定时兑换没成（不是程序异常）：商品若还有下一次开抢，计划就续到那个时间
+                self.exchange_scheduler.update_progress(plan_id, message="正在读取下次兑换时间")
+                next_at = self._lookup_next_exchange_at(plan, goods_name)
+            summary = summarize_exchange_result(result)
+            with self.lock:
+                live = find_shop_plan(self.config, plan_id)
+                if live is not None:
+                    live["last_ok"] = bool(result.get("ok"))
+                    live["last_run"] = datetime.now().isoformat(timespec="seconds")
+                    if result.get("ok"):
+                        live["enable"] = False
+                    elif next_at and self._can_roll_plan(live, plan):
+                        # 期间页面把时间改了或暂停了就不动，以用户的为准
+                        live["exchange_at"] = next_at
+                        live["auto_rolls"] = int(live.get("auto_rolls") or 0) + 1
+                        result["rescheduled_to"] = next_at
+                        result["rescheduled_text"] = datetime.fromtimestamp(next_at, BJT).strftime("%Y-%m-%d %H:%M:%S")
+                        summary = f"{summary}；已顺延到 {result['rescheduled_text']}"
+                    live["last_result"] = summary
+                    save_config(self.config_path, self.config)
+        finally:
+            self.exchange_scheduler.end(plan_id)
+        # 移出锁外：重载会等被移除的线程退出，持锁等待可能互相卡住
+        self.exchange_scheduler.reload(self.config)
+        self.log(f"商品兑换计划完成: {goods_name}，{summary}", "exchange")
+        if push:
             self._send_exchange_push(goods_name, result, plan)
+        if error is not None:
+            raise error
+        return result
+
+    def _can_roll_plan(self, live: dict[str, Any], ran: dict[str, Any]) -> bool:
+        """顺延前再确认一次：计划还在自动执行，且时间还是刚才跑的那个。"""
+        return (
+            live.get("enable") is not False
+            and live.get("auto") is not False
+            and int(live.get("exchange_at") or 0) == int(ran.get("exchange_at") or 0)
+        )
+
+    def _lookup_next_exchange_at(self, plan: dict[str, Any], goods_name: str) -> int:
+        """重新读商品详情里的下次开抢时间。商品没有下一次、或始终读不到时返回 0，计划照常停下。"""
+        goods_id = str(plan.get("goods_id") or "")
+        with self.lock:
+            config = copy.deepcopy(self.config)
+        for attempt in range(1, NEXT_TIME_LOOKUP_TRIES + 1):
+            try:
+                with ApiClient(timeout=10.0) as client:
+                    detail = ShopExchange(client, config).good_detail(goods_id)
+            except Exception as exc:
+                self.log(f"读取下次兑换时间失败（第 {attempt} 次）: {goods_name}，{exc}", "exchange")
+                if attempt < NEXT_TIME_LOOKUP_TRIES:
+                    time.sleep(1)
+                continue
+            next_at = int(detail.get("exchange_timestamp") or 0)
+            # 只认比这次兑换时间和此刻都晚的时间，否则就是已经过去的开抢点
+            if next_at > max(int(plan.get("exchange_at") or 0), int(time.time())):
+                return next_at
+            self.log(f"商品暂无下次兑换时间，不再顺延: {goods_name}", "exchange")
+            return 0
+        return 0
 
     def _send_exchange_push(self, goods_name: str, result: dict[str, Any], plan: dict[str, Any]) -> None:
         """发送商品兑换结果推送"""
@@ -549,12 +690,27 @@ class WebApp:
             raise ValueError("兑换计划所属账号已不存在，请重新选择执行账号")
         return index
 
+    def _keep_refreshed_cookie(self, account: dict[str, Any], cookie_before: str) -> None:
+        """商店接口用的是账号副本，期间用 stoken 刷新过 cookie_token 的话写回配置，下次不用再换。"""
+        cookie = str(account.get("cookie") or "")
+        if cookie == cookie_before:
+            return
+        with self.lock:
+            accounts = self.config.get("accounts") or []
+            index = find_account_index_by_stuid(accounts, str(account.get("stuid") or ""))
+            if index is None:
+                return
+            accounts[index]["cookie"] = cookie
+            save_config(self.config_path, self.config)
+
     def _account_by_index(self, account_index: int) -> dict[str, Any]:
         with self.lock:
             accounts = self.config.get("accounts") or []
             if account_index < 0 or account_index >= len(accounts):
                 raise ValueError("请选择已登录账号")
             account = copy.deepcopy(accounts[account_index])
+        if account_region(account) != REGION_CN:
+            raise ValueError("商店兑换只支持国服账号")
         if not str(account.get("cookie") or "").strip():
             raise ValueError("账号未登录或缺少 cookie")
         return account
@@ -575,6 +731,7 @@ class WebApp:
             account_snapshot = dict(account_payload or {})
             if not draft:
                 account_snapshot = dict(accounts[account_index])
+            ensure_login_region(account_snapshot, REGION_CN)
             account_name = display_account_name(account_snapshot)
             self.login_state = {
                 "running": True,
@@ -611,11 +768,8 @@ class WebApp:
         with self.lock:
             if self.login_state.get("running"):
                 raise RuntimeError("扫码登录正在进行")
-            device = dict(self.config["device"])
         with ApiClient() as client:
-            login = CaptchaLogin(client, str(device["id"]), str(device["fp"]),
-                                 str(device.get("model") or "Mi 14"),
-                                 str(device.get("name") or "Mihoyo Capture"))
+            login = CaptchaLogin(client, self._login_device(client))
             result = login.create_captcha(phone, aigis)
         self.log(f"账号 {account_name} 已发送验证码", "auth")
         return result
@@ -641,11 +795,8 @@ class WebApp:
         with self.lock:
             if self.login_state.get("running"):
                 raise RuntimeError("扫码登录正在进行")
-            device = dict(self.config["device"])
         with ApiClient() as client:
-            login = CaptchaLogin(client, str(device["id"]), str(device["fp"]),
-                                 str(device.get("model") or "Mi 14"),
-                                 str(device.get("name") or "Mihoyo Capture"))
+            login = CaptchaLogin(client, self._login_device(client))
             token_data = login.login_by_mobile_captcha(phone, captcha, action_type, aigis)
             account_data = self._complete_login_data(login, token_data)
         account = self._save_login_account(account_index, account_snapshot, account_data, draft)
@@ -666,6 +817,7 @@ class WebApp:
         account_index: int,
         account_payload: dict[str, Any] | None,
         draft: bool,
+        region: str = REGION_CN,
     ) -> tuple[dict[str, Any], str]:
         with self.lock:
             accounts = self.config.get("accounts") or []
@@ -675,7 +827,47 @@ class WebApp:
             if not draft:
                 account_snapshot = dict(accounts[account_index])
             account_name = display_account_name(account_snapshot)
+        ensure_login_region(account_snapshot, region)
         return account_snapshot, account_name
+
+    def complete_login_cookie(
+        self,
+        account_index: int,
+        cookie: str,
+        account_payload: dict[str, Any] | None = None,
+        draft: bool = False,
+    ) -> dict[str, Any]:
+        """国际服登录：没有扫码 / 验证码，直接收下用户粘贴的 HoYoLAB cookie。"""
+        account_data = parse_hoyolab_cookie(cookie)
+        # 格式对了不代表 cookie 还有效，先拿一次只读的 info 请求试一下
+        status = probe_hoyolab_cookie(account_data["cookie"])
+        if status == "invalid":
+            raise ValueError("HoYoLAB 提示 cookie 无效或已过期，请重新复制一次")
+        account_snapshot, account_name = self._login_account_snapshot(
+            account_index, account_payload, draft, REGION_OS
+        )
+        account = self._save_login_account(account_index, account_snapshot, account_data, draft, REGION_OS)
+        account_name = display_account_name(account)
+        if draft:
+            self.log(f"账号 {account_name} 国际服 cookie 已录入，等待保存", "auth")
+        else:
+            self.log(f"账号 {account_name} 国际服 cookie 已保存", "auth")
+        message = f"账号 {account_name} 登录成功" + ("，请保存账号" if draft else "")
+        if status == "unknown":
+            # 网络抖动不该挡住保存，但要让用户知道这次没验成
+            message += "（暂时无法在线校验，签到时会再确认）"
+        return {
+            "account_index": account_index,
+            "draft": draft,
+            "message": message,
+            "account_data": account_data,
+        }
+
+    def _login_device(self, client: ApiClient) -> dict[str, Any]:
+        """登录用的设备档案快照。fp 先尽量申请好；申请不到就不带这个头，不拿随机串顶替。"""
+        self.ensure_device_fp(client, component="auth")
+        with self.lock:
+            return dict(self.config["device"])
 
     def _complete_login_data(self, login: QRLogin | CaptchaLogin, token_data: dict[str, str]) -> dict[str, str]:
         account_data = {**token_data, **login.get_additional_tokens(token_data["stoken"], token_data["mid"])}
@@ -693,10 +885,13 @@ class WebApp:
         account_snapshot: dict[str, Any],
         account_data: dict[str, str],
         draft: bool,
+        region: str = REGION_CN,
     ) -> dict[str, Any]:
         with self.lock:
             new_uid = str(account_data.get("stuid") or "").strip()
-            duplicate = find_duplicate_uid(self.config.get("accounts") or [], new_uid, None if draft else account_index)
+            duplicate = find_duplicate_uid(
+                self.config.get("accounts") or [], new_uid, None if draft else account_index, region
+            )
             if duplicate is not None:
                 raise ValueError(f"UID {new_uid} 已存在，不能重复添加同一账号")
             account = {**account_snapshot, **account_data}
@@ -725,12 +920,9 @@ class WebApp:
             if self._login_cancel.is_set():
                 return
             with self.lock:
-                device = dict(self.config["device"])
                 account_name = display_account_name(account_snapshot)
             with ApiClient() as client:
-                login = QRLogin(client, str(device["id"]), str(device["fp"]),
-                               str(device.get("model") or "Mi 14"),
-                               str(device.get("name") or "Mihoyo Capture"))
+                login = QRLogin(client, self._login_device(client))
                 url, ticket = login.fetch()
                 qr = make_qr_data_uri(url)
                 with self.lock:
@@ -952,6 +1144,29 @@ def display_account_name(account: dict[str, Any]) -> str:
     return str(account.get("name") or account.get("stuid") or "未命名账号")
 
 
+def parse_avatar_key(value: str) -> str:
+    """把页面传来的头像键规整成 uid（国服）或 os:uid（国际服），不合法返回空串。"""
+    text = str(value or "").strip()
+    region, sep, uid = text.partition(":")
+    if not sep:
+        region, uid = REGION_CN, text
+    if region not in (REGION_CN, REGION_OS):
+        return ""
+    uid = uid.strip()
+    if not (uid.isascii() and uid.isdigit() and len(uid) <= 20):
+        return ""
+    return f"{REGION_OS}:{uid}" if region == REGION_OS else uid
+
+
+def ensure_login_region(account: dict[str, Any], region: str) -> None:
+    """服务器类型一旦确定就不能换：国服的登录凭证写不进国际服账号，反过来也一样。"""
+    if account_region(account) == region:
+        return
+    if region == REGION_CN:
+        raise ValueError("该账号是国际服账号，请用 HoYoLAB cookie 登录")
+    raise ValueError("该账号是国服账号，请用扫码或验证码登录")
+
+
 def normalize_cn_phone(phone: str) -> str:
     digits = "".join(char for char in str(phone or "") if char.isdigit())
     if len(digits) != 11:
@@ -959,13 +1174,15 @@ def normalize_cn_phone(phone: str) -> str:
     return digits
 
 
-def find_duplicate_uid(accounts: list[dict[str, Any]], uid: str, exclude_index: int | None = None) -> int | None:
+def find_duplicate_uid(
+    accounts: list[dict[str, Any]], uid: str, exclude_index: int | None = None, region: str = REGION_CN
+) -> int | None:
     if not uid:
         return None
     for index, account in enumerate(accounts):
         if exclude_index is not None and index == exclude_index:
             continue
-        if str(account.get("stuid") or "").strip() == uid:
+        if account_region(account) == region and str(account.get("stuid") or "").strip() == uid:
             return index
     return None
 
@@ -1182,6 +1399,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/shop/device-fp":
                 self.send_json(self.app.ensure_shop_device_fp())
                 return
+            if path == "/api/device":
+                self.send_json(self.app.device_info())
+                return
             if path == "/api/qqbot/bind/status":
                 self.send_json(self.app.qq_bind_status())
                 return
@@ -1207,6 +1427,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/config":
                 self.app.set_config(payload)
                 self.send_json({"ok": True})
+                return
+            if path == "/api/device/import":
+                self.send_json({"ok": True, **self.app.import_device(str(payload.get("text") or ""))})
+                return
+            if path == "/api/device/fp":
+                self.send_json({"ok": True, **self.app.issue_device_fp()})
+                return
+            if path == "/api/device/reset":
+                self.send_json({"ok": True, **self.app.reset_device(str(payload.get("model") or ""))})
                 return
             if path == "/api/push/test":
                 channel = payload.get("channel") if isinstance(payload, dict) else None
@@ -1272,6 +1501,19 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.send_json({"ok": True, **result})
                 return
+            if path == "/api/login/cookie":
+                account_index = int(payload.get("account_index", -1))
+                account_payload = payload.get("account")
+                if account_payload is not None and not isinstance(account_payload, dict):
+                    raise ValueError("账号数据必须是 JSON 对象")
+                result = self.app.complete_login_cookie(
+                    account_index,
+                    str(payload.get("cookie") or ""),
+                    account_payload,
+                    bool(payload.get("draft")),
+                )
+                self.send_json({"ok": True, **result})
+                return
             if path == "/api/login/refresh":
                 self.app.refresh_login_qr()
                 self.send_json({"ok": True})
@@ -1281,20 +1523,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
                 return
             if path == "/api/shop/exchange":
-                if "plan_index" in payload:
-                    result = self.app.shop_exchange_plan_once(int(payload.get("plan_index")))
+                plan_id = str(payload.get("plan_id") or "")
+                if not plan_id and "plan_index" in payload:
+                    # 旧页面缓存还在发下标，翻译成 id
+                    plans = self.app.config.get("shop_exchange", {}).get("plans") or []
+                    index = int(payload.get("plan_index"))
+                    if 0 <= index < len(plans):
+                        plan_id = str(plans[index].get("id") or "")
+                if plan_id:
+                    result = self.app.shop_exchange_plan_once(plan_id)
                     self.send_json({"ok": True, "result": result, "config": self.app.get_config()})
                     return
                 plan = payload.get("plan")
                 if not isinstance(plan, dict):
                     raise ValueError("兑换计划必须是 JSON 对象")
-                result = self.app.shop_exchange_once(plan)
-                # 处理直接传递plan的情况，也需要推送支持
-                shop_config = self.app.config.get("shop_exchange", {})
-                if shop_config.get("push", False):
-                    goods_name = plan.get("goods_name") or plan.get("goods_id") or "未知商品"
-                    self.app._send_exchange_push(goods_name, result, plan)
-                self.send_json({"ok": True, "result": result})
+                self.send_json({"ok": True, "result": self.app.shop_exchange_adhoc(plan)})
                 return
             self.send_error_json("接口不存在", HTTPStatus.NOT_FOUND)
         except AigisRequired as exc:
@@ -1335,16 +1578,15 @@ class Handler(BaseHTTPRequestHandler):
         # 如果是 HTML 文件，给静态资源添加版本号
         if content_type == "text/html":
             html_content = data.decode("utf-8")
-            app_js_path = WEB_ROOT / "app.js"
-            if app_js_path.exists():
-                mtime = int(app_js_path.stat().st_mtime)
-                html_content = html_content.replace('src="/app.js"', f'src="/app.js?v={mtime}"')
+            for script in ("shop.js", "app.js"):
+                script_path = WEB_ROOT / script
+                if script_path.exists():
+                    mtime = int(script_path.stat().st_mtime)
+                    html_content = html_content.replace(f'src="/{script}"', f'src="/{script}?v={mtime}"')
             data = html_content.encode("utf-8")
 
-        # 生成 ETag（基于文件内容和修改时间）
-        mtime = target.stat().st_mtime
-        size = target.stat().st_size
-        etag = f'"{int(mtime)}-{size}"'
+        # ETag 取最终发出的内容：HTML 里注入了脚本版本号，只看 HTML 文件本身会让旧页面一直 304
+        etag = f'"{hashlib.sha1(data).hexdigest()[:16]}"'
 
         # 检查 If-None-Match 头
         if self.headers.get("If-None-Match") == etag:

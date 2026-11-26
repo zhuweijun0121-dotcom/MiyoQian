@@ -6,15 +6,42 @@ from __future__ import annotations
 import json
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .. import constants as c
-from ..core import crypto
+from ..auth.login import refresh_cookie_token
+from ..core import device as devicelib
 from ..core.http import ApiClient
 
 EmitFn = Callable[[str], None]
 BJT = timezone(timedelta(hours=8))
+
+# 补查商品详情的并发数
+DETAIL_WORKERS = 6
+
+# 重试也不会成功的失败：账号自身的原因，或商品已经没了。只按返回的文字判断；
+# 开抢瞬间返回的「未到兑换时间」之类必须继续重试，所以不能把它们列进来。
+TERMINAL_FAILURES = (
+    ("米游币不足", ("米游币不足", "余额不足", "积分不足")),
+    ("已达限购上限", ("兑换上限", "已达上限", "限购")),
+    ("商品已售罄", ("已售罄", "已兑完", "库存不足")),
+    ("登录已失效", ("未登录", "登录失效", "请先登录")),
+)
+# 收货地址等接口登录失效返回 -100，米游币余额接口返回 -2007
+LOGIN_RETCODES = {-100, -2007}
+# 同一种不可重试的失败连续出现这么多次才提前结束，防止开抢瞬间的一次误判
+TERMINAL_CONFIRM_HITS = 2
+
+
+def terminal_failure_reason(retcode: Any, message: str) -> str:
+    if retcode in LOGIN_RETCODES:
+        return "登录已失效"
+    for reason, keywords in TERMINAL_FAILURES:
+        if any(keyword in message for keyword in keywords):
+            return reason
+    return ""
 
 
 class ShopExchange:
@@ -30,9 +57,10 @@ class ShopExchange:
         self.account = account or {}
         self.device = config["device"]
         self.emit = emit
+        self._cookie_refreshed = False
 
     def goods(self, game: str = "", max_pages: int = 5) -> dict[str, Any]:
-        goods: list[dict[str, Any]] = []
+        raw_goods: list[dict[str, Any]] = []
         games: list[dict[str, str]] = []
         for page in range(1, max_pages + 1):
             data = self.client.get_json(
@@ -54,10 +82,12 @@ class ShopExchange:
             page_goods = raw.get("list") or []
             if not isinstance(page_goods, list) or not page_goods:
                 break
-            for item in page_goods:
-                if not isinstance(item, dict):
-                    continue
-                goods.append(normalize_good(self._enrich_good_for_time(item)))
+            raw_goods.extend(item for item in page_goods if isinstance(item, dict))
+        # 未开售的商品要逐个补查详情才有开售时间，串行的话商品一多就要等很久
+        if raw_goods:
+            with ThreadPoolExecutor(max_workers=min(DETAIL_WORKERS, len(raw_goods))) as pool:
+                raw_goods = list(pool.map(self._enrich_good_for_time, raw_goods))
+        goods = [normalize_good(item) for item in raw_goods]
         goods.sort(key=goods_sort_key)
         return {"games": games, "goods": goods}
 
@@ -90,51 +120,36 @@ class ShopExchange:
             return raw
         return {**raw, **detail}
 
-    def fetch_device_fp(self) -> str:
-        device_id = str(self.device.get("id") or crypto.device_id()).lower()
-        body = {
-            "seed_id": crypto.device_fp()[:8],
-            "device_id": device_id,
-            "platform": "5",
-            "seed_time": str(int(time.time() * 1000)),
-            "ext_fields": (
-                "{\"userAgent\":\""
-                + c.DEFAULT_MOBILE_UA.replace('"', '\\"')
-                + "\",\"browserScreenSize\":243750,\"maxTouchPoints\":5,"
-                "\"isTouchSupported\":true,\"browserLanguage\":\"zh-CN\",\"browserPlat\":\"iPhone\","
-                "\"browserTimeZone\":\"Asia/Shanghai\",\"webGlRender\":\"Apple GPU\","
-                "\"webGlVendor\":\"Apple Inc.\",\"numOfPlugins\":0,\"listOfPlugins\":\"unknown\","
-                "\"screenRatio\":3,\"deviceMemory\":\"unknown\",\"hardwareConcurrency\":\"4\","
-                "\"cpuClass\":\"unknown\",\"ifNotTrack\":\"unknown\",\"ifAdBlock\":0,"
-                "\"hasLiedResolution\":1,\"hasLiedOs\":0,\"hasLiedBrowser\":0}"
-            ),
-            "app_name": "account_cn",
-            "device_fp": crypto.device_fp(),
-        }
-        data = self.client.post_json(c.DEVICE_FP_URL, json=body)
-        raw = data.get("data") or {}
-        device_fp = str(raw.get("device_fp") or "")
-        if data.get("retcode") != 0 or not device_fp:
-            raise ValueError(str(raw.get("msg") or data.get("message") or "device_fp 获取失败"))
-        return device_fp
+    def _refresh_cookie(self) -> bool:
+        """cookie_token 会被服务端作废，遇到登录失效先用 stoken 换一个新的，每个实例只换一次。"""
+        if self._cookie_refreshed or not self.account.get("stoken"):
+            return False
+        self._cookie_refreshed = True
+        if not refresh_cookie_token(self.client, self.account, self.device):
+            return False
+        self._add("cookie_token 已失效，已用 stoken 重新获取")
+        return True
+
+    def _account_get(self, url: str, params: dict[str, Any], origin: str) -> dict[str, Any]:
+        while True:
+            data = self.client.get_json(
+                url,
+                params=params,
+                headers=self._account_headers(host="api-takumi.mihoyo.com", origin=origin),
+            )
+            reason = terminal_failure_reason(data.get("retcode"), str(data.get("message") or ""))
+            if reason != "登录已失效" or not self._refresh_cookie():
+                return data
 
     def points(self) -> dict[str, Any]:
-        data = self.client.get_json(
-            c.MALL_POINT_URL,
-            params={"app_id": 1, "point_sn": "myb"},
-            headers=self._account_headers(host="api-takumi.mihoyo.com", origin="https://webstatic.mihoyo.com"),
-        )
+        data = self._account_get(c.MALL_POINT_URL, {"app_id": 1, "point_sn": "myb"}, "https://webstatic.mihoyo.com")
         if data.get("retcode") != 0:
             raise ValueError(str(data.get("message") or "米游币余额获取失败"))
         raw = data.get("data") or {}
         return raw if isinstance(raw, dict) else {}
 
     def addresses(self) -> list[dict[str, Any]]:
-        data = self.client.get_json(
-            c.MALL_ADDRESS_URL,
-            params={"t": round(time.time() * 1000)},
-            headers=self._account_headers(host="api-takumi.mihoyo.com", origin="https://user.mihoyo.com"),
-        )
+        data = self._account_get(c.MALL_ADDRESS_URL, {"t": round(time.time() * 1000)}, "https://user.mihoyo.com")
         if data.get("retcode") != 0:
             raise ValueError(str(data.get("message") or "收货地址获取失败"))
         raw_list = (data.get("data") or {}).get("list") or []
@@ -154,11 +169,7 @@ class ShopExchange:
     def roles(self, game_biz: str) -> list[dict[str, str]]:
         if not game_biz:
             return []
-        data = self.client.get_json(
-            c.ACCOUNT_ROLES_URL,
-            params={"game_biz": game_biz},
-            headers=self._account_headers(host="api-takumi.mihoyo.com", origin="https://webstatic.mihoyo.com"),
-        )
+        data = self._account_get(c.ACCOUNT_ROLES_URL, {"game_biz": game_biz}, "https://webstatic.mihoyo.com")
         if data.get("retcode") != 0:
             return []
         raw_roles = (data.get("data") or {}).get("list") or []
@@ -218,6 +229,7 @@ class ShopExchange:
         deadline = time.time() + duration
         last: dict[str, Any] = {}
         attempt = 0
+        terminal_hits = 0
         while True:
             attempt += 1
             self._add(f"正在发送第 {attempt} 次商品兑换请求")
@@ -234,7 +246,15 @@ class ShopExchange:
             remaining = deadline - time.time()
             if last.get("ok") or remaining <= 0:
                 return last
-            sleep_seconds = max(interval + random.uniform(-0.5, 0.5), 0.05)
+            reason = terminal_failure_reason(last.get("retcode"), str(last.get("message") or ""))
+            if reason == "登录已失效" and self._refresh_cookie():
+                continue
+            terminal_hits = terminal_hits + 1 if reason else 0
+            if terminal_hits >= TERMINAL_CONFIRM_HITS:
+                self._add(f"商品 {plan.get('goods_id', '')} 连续返回「{reason}」，重试不会成功，提前结束")
+                return last
+            # 抖动按间隔等比放大缩小，平均间隔才和界面里填的一致
+            sleep_seconds = max(interval * random.uniform(0.7, 1.3), 0.05)
             time.sleep(min(sleep_seconds, remaining))
 
     def _goods_headers(self) -> dict[str, str]:
@@ -245,7 +265,7 @@ class ShopExchange:
             "Connection": "keep-alive",
             "x-rpc-device_id": str(self.device["id"]),
             "x-rpc-client_type": "5",
-            "User-Agent": c.DEFAULT_MOBILE_UA,
+            "User-Agent": devicelib.mobile_ua(self.device),
             "Referer": "https://user.mihoyo.com/",
             "Accept-Language": "zh-CN,zh-Hans;q=0.9",
         }
@@ -258,16 +278,20 @@ class ShopExchange:
             "Connection": "keep-alive",
             "x-rpc-device_id": str(self.device["id"]),
             "x-rpc-client_type": "5",
-            "User-Agent": c.DEFAULT_MOBILE_UA,
+            "User-Agent": devicelib.mobile_ua(self.device),
             "Referer": f"{origin}/",
             "Accept-Language": "zh-CN,zh-Hans;q=0.9",
             "Cookie": str(self.account.get("cookie") or ""),
         }
 
     def _exchange_headers(self, plan: dict[str, Any]) -> dict[str, str]:
-        device_fp = str(plan.get("device_fp") or "").strip()
+        # 设备档案里可信的 fp 优先，这样重置设备、导入真机后旧计划也跟着换；
+        # 档案里没有可信的，才退回计划创建时存下的那枚
+        device_fp = (
+            devicelib.effective_fp(self.device) if devicelib.has_trusted_fp(self.device) else ""
+        ) or str(plan.get("device_fp") or "").strip() or devicelib.effective_fp(self.device)
         if not device_fp:
-            raise ValueError("兑换计划缺少 device_fp，请重新添加计划")
+            raise ValueError("兑换计划缺少 device_fp，请先在「设备信息」里申请或导入")
         headers = {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh-Hans;q=0.9",
@@ -276,16 +300,16 @@ class ShopExchange:
             "Host": "api-takumi.miyoushe.com",
             "Origin": "https://webstatic.miyoushe.com",
             "Referer": "https://webstatic.miyoushe.com/",
-            "User-Agent": c.DEFAULT_MOBILE_UA,
+            "User-Agent": devicelib.mobile_ua(self.device),
             "x-rpc-app_version": c.BBS_VERSION,
             "x-rpc-channel": "appstore",
             "x-rpc-client_type": "1",
             "x-rpc-verify_key": c.PASSPORT_APP_ID,
             "x-rpc-device_fp": device_fp,
             "x-rpc-device_id": str(self.device["id"]),
-            "x-rpc-device_model": str(self.device.get("model") or "Mi 6"),
-            "x-rpc-device_name": str(self.device.get("name") or "Xiaomi MI 6"),
-            "x-rpc-sys_version": "12",
+            "x-rpc-device_model": devicelib.device_model(self.device),
+            "x-rpc-device_name": devicelib.device_name(self.device),
+            "x-rpc-sys_version": devicelib.sys_version(self.device),
             "Cookie": str(self.account.get("cookie") or ""),
         }
         return headers
@@ -302,7 +326,8 @@ def normalize_games(raw_games: list[Any]) -> list[dict[str, str]]:
             continue
         key = str(item.get("key") or "")
         name = str(item.get("name") or key)
-        if key:
+        # 接口自带的「全部商品」key 是 all，按它查不到任何商品；不带分区查询才是全部，上面已经有了
+        if key and key != "all":
             games.append({"key": key, "name": name})
     return games
 

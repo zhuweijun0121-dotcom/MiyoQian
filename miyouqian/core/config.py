@@ -5,28 +5,17 @@ from __future__ import annotations
 
 import copy
 import pathlib
-import random
+import uuid
 from typing import Any
 
 import yaml
 
-from . import crypto
+from .cookies import guess_uid
+from .device import normalize_device
+from .region import REGION_CN, REGION_OS, account_region, normalize_region
 
 SENSITIVE_ACCOUNT_FIELDS = ("cookie", "stuid", "stoken", "mid")
 SUPPORTED_CLOUD_GAME_KEYS = ("genshin", "zzz")
-
-DEFAULT_DEVICE_PRESETS: list[dict[str, str]] = [
-    {"name": "Xiaomi 14", "model": "23127PN0CC"},
-    {"name": "Xiaomi 13", "model": "2211133C"},
-    {"name": "Redmi K70", "model": "2311DRK48C"},
-    {"name": "Redmi K60", "model": "23013RK75C"},
-    {"name": "OnePlus 12", "model": "PJD110"},
-    {"name": "OPPO Find X7", "model": "PHZ110"},
-    {"name": "vivo X100", "model": "V2309A"},
-    {"name": "HONOR 100", "model": "MAA-AN00"},
-    {"name": "HUAWEI Mate 60", "model": "BRA-AL00"},
-    {"name": "Samsung Galaxy S23", "model": "SM-S9110"},
-]
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "enable": True,
@@ -37,7 +26,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "log_dir": "logs",
         "log_file": "miyouqian.log",
     },
-    "device": {"id": "", "fp": "", "name": "", "model": "", "presets": DEFAULT_DEVICE_PRESETS},
+    # 设备档案由 core.device 维护：id 本地生成，fp 向服务器申请或导入，其余字段来自机型预设或导入
+    "device": {"id": "", "fp": "", "name": "", "model": ""},
     "features": {"game_checkin": True, "cloud_game_checkin": False, "bbs_tasks": False},
     "captcha": {
         "enable": False,
@@ -146,22 +136,13 @@ def normalize_config(config: dict[str, Any]) -> None:
         config["accounts"] = [accounts]
     for index, account in enumerate(config["accounts"], start=1):
         account["name"] = str(account.get("name") or "")[:10]
+        account["region"] = normalize_region(account.get("region"))
         for field in SENSITIVE_ACCOUNT_FIELDS:
             account.setdefault(field, "")
-    device = config.setdefault("device", {})
-    first_cookie = str(config["accounts"][0].get("cookie", "")) if config["accounts"] else ""
-    presets = device.setdefault("presets", copy.deepcopy(DEFAULT_DEVICE_PRESETS))
-    if not isinstance(presets, list) or not presets:
-        presets = copy.deepcopy(DEFAULT_DEVICE_PRESETS)
-        device["presets"] = presets
-    if not device.get("name") or not device.get("model"):
-        preset = random.choice([item for item in presets if isinstance(item, dict)] or DEFAULT_DEVICE_PRESETS)
-        device["name"] = str(preset.get("name") or DEFAULT_DEVICE_PRESETS[0]["name"])
-        device["model"] = str(preset.get("model") or DEFAULT_DEVICE_PRESETS[0]["model"])
-    if not device.get("id"):
-        device["id"] = crypto.device_id(first_cookie or None)
-    if not device.get("fp"):
-        device["fp"] = crypto.device_fp()
+        if account["region"] == REGION_OS and not account["stuid"] and account.get("cookie"):
+            # 国际服只有 cookie 一项凭证，UID 直接从里面取，手改凭证文件时也不用另填
+            account["stuid"] = guess_uid(str(account["cookie"]))
+    normalize_device(config)
     captcha = config.setdefault("captcha", {})
     captcha["channels"] = normalize_captcha_channels(captcha)
     captcha["enable"] = any(channel.get("enable") for channel in captcha["channels"])
@@ -197,9 +178,8 @@ def normalize_config(config: dict[str, Any]) -> None:
     else:
         forums = list(DEFAULT_CONFIG["bbs"]["forums"])
     bbs["forums"] = forums
-    bbs.setdefault("read", False)
-    bbs.setdefault("like", False)
-    bbs.setdefault("share", False)
+    for key in ("read", "like", "share"):
+        bbs[key] = parse_bool(bbs.get(key, False))
     normalize_shop_exchange(config)
 
 
@@ -221,9 +201,15 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
     if not isinstance(raw_plans, list):
         raw_plans = []
     plans: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
     for raw in raw_plans:
         if not isinstance(raw, dict):
             continue
+        # 计划靠 id 认人：下标会随删除、排序变化，执行结果不能按下标写回
+        plan_id = str(raw.get("id") or "").strip()
+        if not plan_id or plan_id in seen_ids:
+            plan_id = uuid.uuid4().hex[:12]
+        seen_ids.add(plan_id)
         try:
             account_index = max(int(raw.get("account_index", 0)), 0)
         except (TypeError, ValueError):
@@ -233,6 +219,7 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
         except (TypeError, ValueError):
             exchange_at = 0
         plan = {
+            "id": plan_id,
             "enable": parse_bool(raw.get("enable", True)),
             "auto": parse_bool(raw.get("auto", True)),
             "account_index": account_index,
@@ -253,12 +240,68 @@ def normalize_shop_exchange(config: dict[str, Any]) -> None:
             "region_name": str(raw.get("region_name") or "").strip(),
             "address_id": str(raw.get("address_id") or "").strip(),
             "last_result": str(raw.get("last_result") or ""),
+            # 最近一次兑换是否成功；None 表示还没执行过，界面靠它区分「已成功 / 失败 / 已错过」
+            "last_ok": raw["last_ok"] if isinstance(raw.get("last_ok"), bool) else None,
             "last_attempt_key": str(raw.get("last_attempt_key") or ""),
             "last_run": str(raw.get("last_run") or ""),
+            "auto_rolls": max(parse_int(raw.get("auto_rolls"), 0), 0),
         }
         if plan["goods_id"]:
             plans.append(plan)
     shop["plans"] = plans
+
+
+# 这几项只由服务端在执行兑换时写入。页面提交的配置可能是几秒前的旧快照，
+# 照单全收会把刚写好的执行结果、防重复触发的标记覆盖掉
+SHOP_PLAN_RUNTIME_FIELDS = ("last_result", "last_ok", "last_attempt_key", "last_run")
+# 结果属于某一个兑换时间点：用户把时间改了就是新的一轮，上一轮的结果不再适用
+SHOP_PLAN_RESULT_FIELDS = ("last_result", "last_ok", "last_run")
+
+
+def _plan_timestamp(plan: dict[str, Any]) -> int:
+    try:
+        return int(float(plan.get("exchange_at") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _plan_rolls(plan: dict[str, Any]) -> int:
+    return parse_int(plan.get("auto_rolls"), 0)
+
+
+def preserve_shop_plan_runtime(old_config: dict[str, Any], new_config: dict[str, Any]) -> None:
+    """页面保存的配置里，执行结果一类的字段以服务端为准：
+    页面拿到的可能是兑换完成之前的旧快照，不能把刚写进去的结果盖掉。"""
+    old_plans = {
+        plan.get("id"): plan
+        for plan in (old_config.get("shop_exchange") or {}).get("plans") or []
+        if isinstance(plan, dict) and plan.get("id")
+    }
+    for plan in (new_config.get("shop_exchange") or {}).get("plans") or []:
+        old = old_plans.get(plan.get("id"))
+        if not old:
+            continue
+        if _plan_rolls(old) > _plan_rolls(plan):
+            # 服务端在兑换失败后已经把时间顺延到了下一次，页面还停在顺延之前：
+            # 它带来的旧时间不是用户改的，整条以服务端为准，不然顺延会被改回去、结果也被清掉
+            plan["exchange_at"] = old.get("exchange_at", plan.get("exchange_at"))
+            plan["auto_rolls"] = old.get("auto_rolls", 0)
+        rescheduled = _plan_timestamp(old) != _plan_timestamp(plan)
+        if not rescheduled and old.get("last_ok") is True and plan.get("last_ok") is not True:
+            # 成功后的停用也是运行结果，旧页面不能随保存其他设置把计划重新打开。
+            plan["enable"] = old.get("enable", False)
+        for key in SHOP_PLAN_RUNTIME_FIELDS:
+            if rescheduled and key in SHOP_PLAN_RESULT_FIELDS:
+                plan[key] = None if key == "last_ok" else ""
+            else:
+                plan[key] = old.get(key, plan.get(key))
+
+
+def find_shop_plan(config: dict[str, Any], plan_id: str) -> dict[str, Any] | None:
+    for plan in (config.get("shop_exchange") or {}).get("plans") or []:
+        if isinstance(plan, dict) and plan.get("id") == plan_id:
+            return plan
+    return None
 
 
 def normalize_cloud_game_tokens(value: Any) -> dict[str, str]:
@@ -285,7 +328,7 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "pushplus": ("token", "topic"),
     # Server酱³（sc3.ft07.com）：SendKey 形如 sctp1234tXXXX，uid 可留空（会从 SendKey 前缀解析）
     "serverchan": ("sendkey", "uid"),
-    "qq": ("push_url", "access_token", "send_id", "msg_type"),
+    "qq": ("push_url", "access_token", "send_id", "msg_type", "protocol"),
     # QQ 开放平台官方机器人：与上面的 onebot 版 qq 通道无关，
     # user_openid / group_openid 只能通过 Web 控制台的「绑定」按钮获取
     "qqbot": ("app_id", "client_secret", "user_openid", "group_openid", "message_format", "api_base"),
@@ -295,12 +338,15 @@ PUSH_CHANNEL_FIELDS: dict[str, tuple[str, ...]] = {
     "wecombot": ("webhook", "plain_text"),
     "email": ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "mail_from", "mail_to", "smtp_ssl"),
     "gotify": ("server", "token", "priority"),
+    # MeoW：接收人只由昵称确定，昵称就是路径参数
+    "meow": ("nickname",),
 }
 
 # 通道字段的默认值：取值等于默认值不算「已配置」。
 # Web 控制台的 app.js 里有一份对应的 pushChannelDefaults，测试会校验两边一致。
 PUSH_CHANNEL_DEFAULTS: dict[str, dict[str, Any]] = {
     "qqbot": {"message_format": "text"},
+    "qq": {"protocol": "nap"},
     "gotify": {"priority": 5},
 }
 
@@ -329,6 +375,7 @@ def normalize_push_channels(push: dict[str, Any]) -> list[dict[str, Any]]:
         "qq",
         "qqbot",
         "gotify",
+        "meow",
     }
     raw_channels = push.get("channels")
     if not isinstance(raw_channels, list):
@@ -454,22 +501,25 @@ def parse_int(value: Any, default: int = 0) -> int:
 
 
 def validate_unique_account_uids(config: dict[str, Any]) -> None:
-    seen: dict[str, int] = {}
+    # 国服和国际服是两套账号体系，UID 只在同一服务器内要求唯一
+    seen: dict[tuple[str, str], int] = {}
     for index, account in enumerate(config.get("accounts", []), start=1):
         uid = str(account.get("stuid") or "").strip()
         if not uid:
             continue
-        if uid in seen:
-            raise ValueError(f"UID {uid} 已存在于账号 {seen[uid]}，不能重复添加同一账号")
-        seen[uid] = index
+        key = (account_region(account), uid)
+        if key in seen:
+            raise ValueError(f"UID {uid} 已存在于账号 {seen[key]}，不能重复添加同一账号")
+        seen[key] = index
 
 
 def find_account_index_by_stuid(accounts: list[dict[str, Any]], stuid: str) -> int | None:
+    """按 stuid 找国服账号的下标。商店兑换是国服功能，国际服账号不参与。"""
     stuid = str(stuid or "").strip()
     if not stuid:
         return None
     for index, account in enumerate(accounts):
-        if str(account.get("stuid") or "").strip() == stuid:
+        if account_region(account) == REGION_CN and str(account.get("stuid") or "").strip() == stuid:
             return index
     return None
 
@@ -491,7 +541,7 @@ def bind_shop_plan_accounts(config: dict[str, Any]) -> None:
         stuid = str(plan.get("account_stuid") or "").strip()
         if not stuid:
             index = plan.get("account_index", 0)
-            if isinstance(index, int) and 0 <= index < len(accounts):
+            if isinstance(index, int) and 0 <= index < len(accounts) and account_region(accounts[index]) == REGION_CN:
                 plan["account_stuid"] = str(accounts[index].get("stuid") or "").strip()
             continue
         index = find_account_index_by_stuid(accounts, stuid)
@@ -517,9 +567,14 @@ def find_account(config: dict[str, Any], name: str | None = None) -> dict[str, A
 def upsert_account(config: dict[str, Any], name: str, data: dict[str, Any]) -> dict[str, Any]:
     accounts = config.setdefault("accounts", [])
     new_uid = str(data.get("stuid") or "").strip()
+    new_region = normalize_region(data.get("region"))
     if new_uid:
         for account in accounts:
-            if account.get("name") != name and str(account.get("stuid") or "").strip() == new_uid:
+            if (
+                account.get("name") != name
+                and account_region(account) == new_region
+                and str(account.get("stuid") or "").strip() == new_uid
+            ):
                 raise ValueError(f"UID {new_uid} 已存在，不能重复添加同一账号")
     for account in accounts:
         if account.get("name") == name:

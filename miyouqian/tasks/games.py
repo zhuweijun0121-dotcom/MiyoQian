@@ -10,6 +10,7 @@ from typing import Any, Callable
 from .. import constants as c
 from ..auth.login import refresh_cookie_token
 from ..core import captcha, crypto
+from ..core import device as devicelib
 from ..core.http import ApiClient
 
 
@@ -31,6 +32,10 @@ class GameCheckin:
         enabled = self.config.get("games", {}).get("enabled", [])
         if only_games:
             enabled = [game for game in enabled if game in only_games]
+        # cookie_token_v2 只有 48 小时有效期，签到接口会拒绝过期的，查角色接口却可能照常放行，
+        # 等 -100 再刷新来不及，所以每轮签到前先用 stoken 换一次
+        if enabled and self.account.get("stoken"):
+            refresh_cookie_token(self.client, self.account, self.device)
         messages: list[str] = []
         success: list[str] = []
         failed: list[str] = []
@@ -154,7 +159,7 @@ class GameCheckin:
             "x-rpc-channel": "miyousheluodi",
             "Origin": "https://act.mihoyo.com",
             "x-rpc-app_version": c.BBS_VERSION,
-            "User-Agent": c.DEFAULT_MOBILE_UA,
+            "User-Agent": devicelib.mobile_ua(self.device),
             "x-rpc-client_type": "5",
             "Referer": "https://act.mihoyo.com/",
             "Accept-Language": "zh-CN,en-US;q=0.8",
@@ -172,7 +177,7 @@ class GameCheckin:
             headers=self._headers(game),
         )
         if data.get("retcode") == -100 and not retried:
-            if refresh_cookie_token(self.client, self.account):
+            if refresh_cookie_token(self.client, self.account, self.device):
                 return self._get_roles(game, retried=True)
         if data.get("retcode") != 0:
             return []
