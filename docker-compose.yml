@@ -1,0 +1,42 @@
+# 成品部署：拉镜像 + 起服务，配置/凭证/日志都在 ./state 里，重建容器不丢。
+#
+#   docker compose up -d
+#   docker compose pull && docker compose up -d     # 更新到最新镜像
+#
+# 验证码默认走自建 gt-solver（见镜像内 /app/config.default.yaml），
+# 所以本文件加了 extra_hosts，让容器能用 host.docker.internal 访问宿主机上的 10721。
+# gt-solver 不在宿主机、而在另一个容器里的话：
+#   1) 两个容器接入同一网络，且 gt-solver 的服务名可解析；
+#   2) 首次启动后到 Web 控制台把「自定义接口」地址改成 http://<服务名>:10721/custom。
+services:
+  miyouqian:
+    image: zhu822560687/miyouqian:latest
+    container_name: miyouqian
+    restart: unless-stopped
+    init: true
+    ports:
+      - "5890:5890"
+    extra_hosts:
+      # 让容器能访问宿主机（gt-solver 默认跑在宿主机 10721）
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./state:/app/state
+    environment:
+      - TZ=Asia/Shanghai
+    # 镜像里的默认用户是 myq(uid 999)。很多 NAS 的用户目录是 700 root，
+    # uid 999 写不进去，所以这里显式用 root；同时 cap_drop 掉全部能力，
+    # 只补回写目录必需的三个（否则 root 在别人属主的目录里也写不动）。
+    # 想按上游用非 root：先 `chown -R 999:999 ./state`，再把 user 改成 "999:999"、
+    # 并删掉下面的 cap_add。
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
