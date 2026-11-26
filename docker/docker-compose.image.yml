@@ -3,7 +3,7 @@
 # 更新：docker compose pull && docker compose up -d
 services:
   miyouqian:
-    image: ghcr.io/marchen-orz/miyouqian:latest
+    image: zhu822560687/miyouqian:latest
     container_name: miyouqian
     restart: unless-stopped
     init: true

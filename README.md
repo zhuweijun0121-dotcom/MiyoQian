@@ -1,5 +1,9 @@
 <h1>米游签</h1>
 
+> **本仓是个人镜像仓**：源码自动跟随上游 [Marchen-orz/MiyoQian](https://github.com/Marchen-orz/MiyoQian)，
+> 额外预置了离线依赖（`vendor/wheels`），构建镜像不需要访问 PyPI / ghcr.io。
+> 镜像：`zhu822560687/miyouqian`。详见 [MIRROR.md](./MIRROR.md)。
+
 <div align="center">
   <h1 align="center">
     <img src="./miyouqian/webui/assets/myq_logo.png" width="200" alt="米游签" style="border-radius:10px">

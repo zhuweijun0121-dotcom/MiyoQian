@@ -1,13 +1,23 @@
-name: Sync Upstream & Build
+name: 同步上游并构建镜像
+
+# 本仓的定位：
+#   1. 内容 = 上游 Marchen-orz/MiyoQian 的完整源码（每 8 小时自动合并一次）；
+#   2. 附加 = vendor/wheels 里预下载的 Python 依赖，让镜像构建不需要外网 PyPI；
+#   3. 产出 = 自动构建并推送到 Docker Hub：zhu822560687/miyouqian。
+#
+# 镜像 tag 规则（上游本身不发版本号，所以不自己造 vX.Y.Z）：
+#   latest          —— 永远指向最近一次成功构建
+#   sha-<上游提交>   —— 精确对应上游的某次提交，例如 sha-b93a53d
+#   <日期>          —— 构建日期，例如 20261126，方便按天回滚
 
 on:
   schedule:
-    # 每8小时检查一次上游是否有更新
+    # 每 8 小时检查一次上游是否有更新
     - cron: "0 */8 * * *"
   workflow_dispatch:  # 手动触发也能用
     inputs:
       force_build:
-        description: '跳过更新检查，强制构建镜像'
+        description: "跳过更新检查，强制构建镜像"
         type: boolean
         default: false
 
@@ -18,15 +28,18 @@ concurrency:
   group: sync-build
   cancel-in-progress: true
 
+env:
+  IMAGE: zhu822560687/miyouqian
+
 jobs:
   sync:
     name: 同步上游 + 构建推送
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -37,31 +50,30 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: 添加上游远程仓库
-        run: |
-          git remote add upstream https://github.com/Marchen-orz/MiyoQian.git || true
+        run: git remote add upstream https://github.com/Marchen-orz/MiyoQian.git || true
 
       - name: 检查上游是否有更新
         id: check
         run: |
-          git fetch upstream master
+          git fetch upstream master --tags
           LOCAL=$(git rev-parse HEAD)
           UPSTREAM=$(git rev-parse upstream/master)
           NEW_COMMITS=$(git rev-list --count "$LOCAL".."$UPSTREAM")
+
+          echo "upstream_sha=${UPSTREAM:0:7}" >> "$GITHUB_OUTPUT"
+          echo "date_tag=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
           if [ "$NEW_COMMITS" -eq 0 ] && [ "${{ inputs.force_build }}" != "true" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "✅ 上游无更新，跳过"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            COMMITS=$(git log --oneline "$LOCAL".."$UPSTREAM" | head -5)
-            echo "上游新提交 ($NEW_COMMITS 个):"
-            echo "$COMMITS"
-            echo "commits<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$COMMITS" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "上游新提交 ($NEW_COMMITS 个)："
+            git log --oneline "$LOCAL".."$UPSTREAM" | head -10
           fi
 
       - name: 合并上游更新
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+        if: steps.check.outputs.changed == 'true'
         run: |
           # 以原作者代码为主：冲突处一律取上游版本
           if ! git merge upstream/master --no-edit -X theirs; then
@@ -78,61 +90,62 @@ jobs:
             exit 1
           fi
 
-      - name: 应用补丁
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+      - name: 应用本地补丁
+        if: steps.check.outputs.changed == 'true'
         run: bash patch.sh
 
-      - name: 计算新版本号
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
-        id: version
-        run: |
-          # 从 git tags 获取当前最新版本号（Hub 上的 tag 只有镜像推送成功后才存在，
-          # 用 git tags 避免构建失败后版本号卡住不动）
-          CURRENT=$(git tag --list 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
-          echo "当前最新版本: v${CURRENT}"
-          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-          MINOR=$(echo "$CURRENT" | cut -d. -f2)
-          PATCH=$(echo "$CURRENT" | cut -d. -f3)
-          NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "新版本号: $NEW_VERSION"
+      - name: 依赖包同步（只有 requirements.txt 变化才重新下载）
+        if: steps.check.outputs.changed == 'true'
+        run: bash scripts/vendor-check.sh
 
-      - name: 提交变更
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+      - name: 提交并推送
+        if: steps.check.outputs.changed == 'true'
         run: |
           git add -A
-          git commit --allow-empty -m "chore(release): ${{ steps.version.outputs.new_version }}"
-
-      - name: 推送到 GitHub
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
-        run: git push origin master
+          if git diff --cached --quiet; then
+            git commit --allow-empty -m "chore: 同步上游 ${{ steps.check.outputs.upstream_sha }}（无代码变化，仅重建镜像）"
+          else
+            git commit -m "chore: 同步上游 ${{ steps.check.outputs.upstream_sha }}"
+          fi
+          git push origin master
 
       - name: 设置 Docker Buildx
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+        if: steps.check.outputs.changed == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: 登录 Docker Hub
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+        if: steps.check.outputs.changed == 'true'
         uses: docker/login-action@v3
         with:
           username: zhu822560687
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: 构建并推送镜像
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+        if: steps.check.outputs.changed == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
+          platforms: linux/amd64
           push: true
           tags: |
-            zhu822560687/miyoqian:latest
-            zhu822560687/miyoqian:${{ steps.version.outputs.new_version }}
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ steps.check.outputs.upstream_sha }}
+            ${{ env.IMAGE }}:${{ steps.check.outputs.date_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/zhuweijun0121-dotcom/MiyoQian
+            org.opencontainers.image.revision=${{ steps.check.outputs.upstream_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: 打 Git Tag（镜像推送成功后）
-        if: steps.check.outputs.changed == 'true' || inputs.force_build == true
+      - name: 输出摘要
+        if: steps.check.outputs.changed == 'true'
         run: |
-          git tag ${{ steps.version.outputs.new_version }}
-          git push origin ${{ steps.version.outputs.new_version }}
+          {
+            echo "### 构建完成"
+            echo ""
+            echo "- 上游提交：\`${{ steps.check.outputs.upstream_sha }}\`"
+            echo "- 镜像：\`${IMAGE}:latest\`"
+            echo "- 精确版本：\`${IMAGE}:sha-${{ steps.check.outputs.upstream_sha }}\`"
+            echo "- 日期标签：\`${IMAGE}:${{ steps.check.outputs.date_tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,15 @@
+# 由 scripts/vendor-sync.sh 自动生成，请勿手改。
+# 目标：CPython 3.11 / linux amd64（bookworm）
+anyio==4.16.0
+certifi==2026.11.20
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+loguru==0.8.0
+pillow==13.0.0
+pyfiglet==1.0.4
+pyyaml==6.0.4
+qrcode==8.2
+typing_extensions==4.16.0
+websockets==17.4
