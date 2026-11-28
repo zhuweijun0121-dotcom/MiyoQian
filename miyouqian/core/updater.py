@@ -336,13 +336,10 @@ def fetch_remote_commits(
         if prefix == custom_gh:
             continue
         candidates.append((f"加速源 ({urlparse(prefix).netloc})", "atom", wrap_github_url(GITHUB_ATOM_URL, prefix)))
-    oci_hosts: list[str] = []
-    if custom_ghcr:
-        oci_hosts.append(custom_ghcr)
-    if DEFAULT_GHCR_MIRROR not in oci_hosts:
-        oci_hosts.append(DEFAULT_GHCR_MIRROR)
-    for host in oci_hosts:
-        candidates.append((f"镜像仓库 ({host})", "oci", host))
+    # 本仓改造：不再用 ghcr 镜像仓库做兜底。
+    # 它读的是上游镜像的 revision（上游 sha），与本地烤进去的本仓 HEAD 永不相等，
+    # 网络不好走到这里会误报「有更新」。无 GitHub 源可用时直接报检查失败。
+    _ = custom_ghcr  # 配置项保留，但不再参与兜底
 
     errors: list[str] = []
     headers = {"User-Agent": "MiyoQian-Updater", "Accept": "application/atom+xml, application/json"}

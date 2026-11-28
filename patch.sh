@@ -198,6 +198,64 @@ PY
 python3 -m py_compile miyouqian/core/updater.py || fail "updater.py 语法检查未通过"
 echo "✅ updater.py 补丁完成，语法检查通过"
 
+# ---------------------------------------------------------------- 3b
+# 业务源码补丁 C：去掉「ghcr 镜像仓库」这个兜底源。
+#
+# 上游源顺序：自定义加速源 → GitHub atom → GitHub API → gh-proxy 加速源 →
+# ghcr 镜像仓库（ghcr.nju.edu.cn/marchen-orz/miyouqian）。
+# 最后那个读的是【上游镜像】的 revision 标签 = 上游 sha，而本地烤的是【本仓 HEAD】，
+# 两者永不相等 —— 一旦走到这个兜底，界面就误报「有更新」，点更新又拉不到东西。
+#
+# 为什么不改成读我们自己的 Docker Hub 镜像：实测这台机器上从容器内
+# auth.docker.io / registry-1.docker.io 不可达（IPv6 直连 network unreachable、
+# IPv4 超时）。所以直接去掉这个源 —— 所有 GitHub 源都失败时诚实地报「检查失败」，
+# 而不是给一个错的答案。
+echo "=== 3b) 补丁：去掉误导性的 ghcr 镜像兜底源 ==="
+python3 - <<'PYCHK' || fail "updater.py 兜底源补丁失败"
+import pathlib
+import sys
+
+p = pathlib.Path("miyouqian/core/updater.py")
+src = p.read_text(encoding="utf-8")
+
+MARK = "_ = custom_ghcr  # 配置项保留，但不再参与兜底"
+NEW = (
+    "    # 本仓改造：不再用 ghcr 镜像仓库做兜底。\n"
+    "    # 它读的是上游镜像的 revision（上游 sha），与本地烤进去的本仓 HEAD 永不相等，\n"
+    "    # 网络不好走到这里会误报「有更新」。无 GitHub 源可用时直接报检查失败。\n"
+    "    " + MARK + "\n"
+)
+OLD = (
+    "    oci_hosts: list[str] = []\n"
+    "    if custom_ghcr:\n"
+    "        oci_hosts.append(custom_ghcr)\n"
+    "    if DEFAULT_GHCR_MIRROR not in oci_hosts:\n"
+    "        oci_hosts.append(DEFAULT_GHCR_MIRROR)\n"
+    "    for host in oci_hosts:\n"
+    '        candidates.append((f"镜像仓库 ({host})", "oci", host))\n'
+)
+
+if MARK in src:
+    print("   (已去掉 ghcr 兜底，跳过)")
+elif OLD in src:
+    src = src.replace(OLD, NEW, 1)
+    p.write_text(src, encoding="utf-8")
+    print("   (已去掉 ghcr 镜像兜底源)")
+else:
+    sys.exit("找不到 oci_hosts 构建块，上游可能改动了 fetch_remote_commits")
+
+final = p.read_text(encoding="utf-8")
+if MARK not in final:
+    sys.exit("兜底源补丁校验失败：标记缺失")
+if 'oci_hosts.append(DEFAULT_GHCR_MIRROR)' in final:
+    sys.exit("兜底源补丁校验失败：ghcr 兜底仍在")
+if 'candidates.append((f"镜像仓库 ({host})", "oci", host))' in final:
+    sys.exit("兜底源补丁校验失败：仍会往候选里加镜像仓库")
+print("   ✅ 校验通过（检查更新只查 GitHub 系源：自家仓 atom / API / gh-proxy）")
+PYCHK
+python3 -m py_compile miyouqian/core/updater.py || fail "兜底源补丁后语法检查未通过"
+echo "✅ 兜底源补丁完成"
+
 # ---------------------------------------------------------------- 4
 # 删掉上游带过来、但本仓不该跑的 workflow。
 # merge -X theirs 会把它们加回来，所以每次同步后必须再删一次。
