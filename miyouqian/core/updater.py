@@ -33,6 +33,10 @@ GITHUB_ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/{GITH
 GHCR_REGISTRY = "ghcr.io"
 GHCR_IMAGE_PATH = f"{GITHUB_OWNER.lower()}/{GITHUB_REPO_NAME.lower()}"
 GHCR_DEFAULT_IMAGE = f"{GHCR_REGISTRY}/{GHCR_IMAGE_PATH}:latest"
+
+# 本仓改造：容器实际运行的镜像（Docker Hub）。上游拿 GHCR_DEFAULT_IMAGE 当
+# "当前镜像"兜底时会显示成作者的 ghcr 镜像，这里换成本仓的。
+MIRROR_IMAGE = "zhu822560687/miyouqian:latest"
 DEFAULT_GHCR_MIRROR = "ghcr.nju.edu.cn"
 
 # 国内访问 GitHub 失败时自动回退的加速前缀
@@ -165,6 +169,10 @@ def build_docker_manual_command(
     ghcr_mirror: str = "",
 ) -> str:
     """生成给未挂载 docker.sock 用户的宿主机更新命令提示。"""
+    # 本仓改造：非 ghcr 镜像（如 Docker Hub）不需要加速源，直接给 compose 命令
+    _repo, _tag = split_image_ref(image_ref or MIRROR_IMAGE)
+    if not _repo.startswith(f"{GHCR_REGISTRY}/"):
+        return "docker compose pull && docker compose up -d"
     mirror = normalize_ghcr_mirror(ghcr_mirror) or DEFAULT_GHCR_MIRROR
     mirrored = mirror_image_ref(image_ref or GHCR_DEFAULT_IMAGE, mirror)
     return (
@@ -742,7 +750,7 @@ def get_local_version(
     if mode == "docker":
         info["commit"] = str(os.environ.get("MIYOUQIAN_BUILD_COMMIT") or "").strip().lower()
         info["commit_time"] = str(os.environ.get("MIYOUQIAN_BUILD_TIME") or "").strip()
-        info["image"] = GHCR_DEFAULT_IMAGE
+        info["image"] = MIRROR_IMAGE
 
         client = DockerSocketClient(socket_path=socket_path)
         ok, err = client.ping()
@@ -879,7 +887,7 @@ def check_for_updates(
         "has_update": has_update,
         "new_commits": ahead_commits,
         "manual_command": (
-            build_docker_manual_command(local.get("image") or GHCR_DEFAULT_IMAGE, ghcr_mirror=ghcr_mirror)
+            build_docker_manual_command(local.get("image") or MIRROR_IMAGE, ghcr_mirror=ghcr_mirror)
             if local["mode"] == "docker"
             else ""
         ),
@@ -1185,7 +1193,7 @@ def apply_docker_update(
     inspected = client.inspect_container(container_id)
     full_id = str(inspected.get("Id") or container_id)
     old_image_id = str(inspected.get("Image") or "")
-    current_image_ref = str((inspected.get("Config") or {}).get("Image") or GHCR_DEFAULT_IMAGE).strip()
+    current_image_ref = str((inspected.get("Config") or {}).get("Image") or MIRROR_IMAGE).strip()
     orig_repo, orig_tag = split_image_ref(current_image_ref)
 
     custom_mirror = normalize_ghcr_mirror(ghcr_mirror) if ghcr_mirror else ""

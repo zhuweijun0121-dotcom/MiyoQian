@@ -70,6 +70,98 @@ grep -q 'config.default.yaml' docker/entrypoint.sh \
 echo "✅ docker/entrypoint.sh 已更新（首次启动用本仓默认配置）"
 
 # ---------------------------------------------------------------- 3
+# 业务源码补丁：只有一处，且只改「镜像指向」，不动更新逻辑本身。
+#
+# 背景：上游 updater.py 把镜像写死成 ghcr.io/marchen-orz/miyoqian:latest（作者的）。
+# 我们的容器跑的是 Docker Hub 上的 zhu822560687/miyouqian:latest。没挂 docker.sock 时
+# 上游拿那个硬编码值当"当前镜像"，于是 UI 上显示的和提示你去拉的都成了作者的镜像。
+# 这里换成我们自己的；顺手让「手动命令」提示对 Docker Hub 镜像不再拼 ghcr 加速源。
+echo "=== 3) 补丁：updater.py 的镜像指向本仓镜像 ==="
+python3 - <<'PY' || fail "updater.py 补丁失败"
+import pathlib
+import sys
+
+p = pathlib.Path("miyouqian/core/updater.py")
+if not p.is_file():
+    sys.exit("找不到 miyouqian/core/updater.py（上游可能改了文件名）")
+
+src = p.read_text(encoding="utf-8")
+MIRROR = "zhu822560687/miyouqian:latest"
+
+if "MIRROR_IMAGE" in src:
+    if f'MIRROR_IMAGE = "{MIRROR}"' not in src:
+        sys.exit("updater.py 里已有 MIRROR_IMAGE 但值不是本仓镜像，请人工检查")
+    print("   (已是本仓镜像，跳过)")
+else:
+    # 1) 常量
+    anchor = 'GHCR_DEFAULT_IMAGE = f"{GHCR_REGISTRY}/{GHCR_IMAGE_PATH}:latest"\n'
+    if anchor not in src:
+        sys.exit("找不到 GHCR_DEFAULT_IMAGE 定义，上游可能改动了该常量")
+    src = src.replace(
+        anchor,
+        anchor
+        + "\n# 本仓改造：容器实际运行的镜像（Docker Hub）。上游拿 GHCR_DEFAULT_IMAGE 当\n"
+        + '# "当前镜像"兜底时会显示成作者的 ghcr 镜像，这里换成本仓的。\n'
+        + f'MIRROR_IMAGE = "{MIRROR}"\n',
+        1,
+    )
+
+    # 2) 无 docker.sock 时展示的"当前镜像"
+    old = '        info["image"] = GHCR_DEFAULT_IMAGE\n'
+    if old not in src:
+        sys.exit("找不到 get_local_version 里的 info[\"image\"] 赋值")
+    src = src.replace(old, '        info["image"] = MIRROR_IMAGE\n', 1)
+
+    # 3) 手动命令提示里的镜像是 local 的兜底
+    old = 'build_docker_manual_command(local.get("image") or GHCR_DEFAULT_IMAGE, ghcr_mirror=ghcr_mirror)'
+    if old not in src:
+        sys.exit("找不到 manual_command 的调用点")
+    src = src.replace(
+        old,
+        'build_docker_manual_command(local.get("image") or MIRROR_IMAGE, ghcr_mirror=ghcr_mirror)',
+        1,
+    )
+
+    # 4) 真正执行更新时的镜像兜底
+    old = 'or GHCR_DEFAULT_IMAGE).strip()'
+    if old not in src:
+        sys.exit("找不到 apply_docker_update 里的 current_image_ref 兜底")
+    src = src.replace(old, 'or MIRROR_IMAGE).strip()', 1)
+
+    # 5) Docker Hub 镜像不该被拼上 ghcr 加速源
+    old_doc = '    """生成给未挂载 docker.sock 用户的宿主机更新命令提示。"""\n'
+    if old_doc not in src:
+        sys.exit("找不到 build_docker_manual_command 的文档字符串")
+    src = src.replace(
+        old_doc,
+        old_doc
+        + "    # 本仓改造：非 ghcr 镜像（如 Docker Hub）不需要加速源，直接给 compose 命令\n"
+        + "    _repo, _tag = split_image_ref(image_ref or MIRROR_IMAGE)\n"
+        + f'    if not _repo.startswith(f"{{GHCR_REGISTRY}}/"):\n'
+        + '        return "docker compose pull && docker compose up -d"\n',
+        1,
+    )
+
+    p.write_text(src, encoding="utf-8")
+    print("   (已把镜像指向本仓并修正手动命令提示)")
+
+final = p.read_text(encoding="utf-8")
+for needle in (
+    f'MIRROR_IMAGE = "{MIRROR}"',
+    'info["image"] = MIRROR_IMAGE',
+    'or MIRROR_IMAGE).strip()',
+    'local.get("image") or MIRROR_IMAGE',
+):
+    if needle not in final:
+        sys.exit(f"补丁校验失败：缺少 {needle}")
+if 'info["image"] = GHCR_DEFAULT_IMAGE' in final:
+    sys.exit("补丁校验失败：仍残留 info[\"image\"] = GHCR_DEFAULT_IMAGE")
+print("   ✅ 校验通过")
+PY
+python3 -m py_compile miyouqian/core/updater.py || fail "updater.py 语法检查未通过"
+echo "✅ updater.py 补丁完成，语法检查通过"
+
+# ---------------------------------------------------------------- 4
 # 删掉上游带过来、但本仓不该跑的 workflow。
 # merge -X theirs 会把它们加回来，所以每次同步后必须再删一次。
 #   - checkin.yml  上游的 GitHub Actions 定时签到：依赖 MIYOUQIAN_CONFIG /
@@ -78,7 +170,7 @@ echo "✅ docker/entrypoint.sh 已更新（首次启动用本仓默认配置）"
 #   - docker.yml   上游推 ghcr.io/marchen-orz/miyouqian：本仓属主是
 #                  zhuweijun0121-dotcom，对那个 package 没有写权限，每次 push
 #                  都必然失败。本仓的镜像由 sync-upstream.yml 推 Docker Hub。
-echo "=== 3) 清理上游带过来的无关 workflow ==="
+echo "=== 4) 清理上游带过来的无关 workflow ==="
 mkdir -p .github/workflows
 for f in .github/workflows/checkin.yml .github/workflows/docker.yml; do
   if [ -f "$f" ]; then
@@ -95,8 +187,8 @@ for f in .github/workflows/*.yml .github/workflows/*.yaml; do
 done
 echo "✅ 只剩 sync-upstream.yml"
 
-# ---------------------------------------------------------------- 4
-echo "=== 4) 校验默认配置可用 ==="
+# ---------------------------------------------------------------- 5
+echo "=== 5) 校验默认配置可用 ==="
 python3 - <<'PY' || fail "mirror/config.default.yaml 不是合法 YAML"
 import yaml
 d = yaml.safe_load(open("mirror/config.default.yaml", encoding="utf-8"))

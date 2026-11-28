@@ -11,8 +11,25 @@
 #   2. 基础镜像用 ARG 暴露，需要时可换镜像加速地址。
 #   3. 额外塞一份 mirror/config.default.yaml 进镜像，首次启动时用它当默认配置
 #      （验证码默认走自建 gt-solver），见 mirror/entrypoint.sh。
+#   4. 构建期把上游 commit 烤进镜像（ARG → ENV MIYOUQIAN_BUILD_COMMIT / LABEL）。
+#      上游的「检查更新」在没有 docker.sock 时读不到本地镜像标签，会一直报
+#      「有更新」。烤进环境变量后，它就能正确判断本地版本 = 上游哪个提交。
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
+ARG BUILD_COMMIT=""
+ARG BUILD_TIME=""
 FROM ${PYTHON_IMAGE}
+
+# ARG 在 FROM 之后要重新声明，否则 THIS 阶段读不到值
+ARG BUILD_COMMIT
+ARG BUILD_TIME
+
+# 供上游 updater 的 get_local_version() 读取（它优先读这个环境变量）
+ENV MIYOUQIAN_BUILD_COMMIT=${BUILD_COMMIT} \
+    MIYOUQIAN_BUILD_TIME=${BUILD_TIME}
+
+LABEL org.opencontainers.image.source="https://github.com/zhuweijun0121-dotcom/MiyoQian" \
+      org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 
 WORKDIR /app
 

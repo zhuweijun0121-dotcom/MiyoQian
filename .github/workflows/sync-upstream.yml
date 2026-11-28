@@ -61,7 +61,11 @@ jobs:
           NEW_COMMITS=$(git rev-list --count "$LOCAL".."$UPSTREAM")
 
           echo "upstream_sha=${UPSTREAM:0:7}" >> "$GITHUB_OUTPUT"
+          # 完整 40 位 sha：烤进镜像作为版本标识，也用作 OCI revision 标签
+          # （上游 updater 用正则 [0-9a-f]{40} 校验，短 sha 不认）
+          echo "upstream_sha_full=$UPSTREAM" >> "$GITHUB_OUTPUT"
           echo "date_tag=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
           if [ "$NEW_COMMITS" -eq 0 ] && [ "${{ inputs.force_build }}" != "true" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -134,7 +138,11 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.check.outputs.date_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/zhuweijun0121-dotcom/MiyoQian
-            org.opencontainers.image.revision=${{ steps.check.outputs.upstream_sha }}
+            org.opencontainers.image.revision=${{ steps.check.outputs.upstream_sha_full }}
+            org.opencontainers.image.created=${{ steps.check.outputs.build_time }}
+          build-args: |
+            BUILD_COMMIT=${{ steps.check.outputs.upstream_sha_full }}
+            BUILD_TIME=${{ steps.check.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
