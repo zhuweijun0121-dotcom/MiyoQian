@@ -11,9 +11,11 @@
 #   2. 基础镜像用 ARG 暴露，需要时可换镜像加速地址。
 #   3. 额外塞一份 mirror/config.default.yaml 进镜像，首次启动时用它当默认配置
 #      （验证码默认走自建 gt-solver），见 mirror/entrypoint.sh。
-#   4. 构建期把上游 commit 烤进镜像（ARG → ENV MIYOUQIAN_BUILD_COMMIT / LABEL）。
-#      上游的「检查更新」在没有 docker.sock 时读不到本地镜像标签，会一直报
-#      「有更新」。烤进环境变量后，它就能正确判断本地版本 = 上游哪个提交。
+#   4. 构建期把「本仓 HEAD 的 commit」烤进镜像（ARG → ENV MIYOUQIAN_BUILD_COMMIT / LABEL）。
+#      本仓的「检查更新」改为查询 zhuweijun0121-dotcom/MiyoQian（见 patch.sh 的 updater 补丁），
+#      比对的就是这个值。没有 docker.sock 时它读不到本地镜像标签，所以必须烤进来；
+#      而且必须是本仓的 commit 而不是上游 sha —— 本仓 HEAD 是 CI 的 chore 提交，
+#      与上游 sha 永不相等，用上游 sha 会恒报「有更新」。
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
 ARG BUILD_COMMIT=""
 ARG BUILD_TIME=""

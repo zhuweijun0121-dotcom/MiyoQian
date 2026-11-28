@@ -113,6 +113,18 @@ jobs:
           fi
           git push origin master
 
+      # 镜像里烤的版本标识必须是【本仓】的 commit，不是上游 sha。
+      # 因为容器的「检查更新」查的是本仓（zhuweijun0121-dotcom/MiyoQian）的 master，
+      # 拿上游 sha 去比永不相等，会恒报「有更新」。这里在 push 之后取本仓 HEAD。
+      - name: 计算镜像版本标识
+        if: steps.check.outputs.changed == 'true'
+        id: ver
+        run: |
+          echo "build_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "本仓构建提交: $(git rev-parse HEAD)"
+          echo "对应上游提交: ${{ steps.check.outputs.upstream_sha_full }}"
+
       - name: 设置 Docker Buildx
         if: steps.check.outputs.changed == 'true'
         uses: docker/setup-buildx-action@v3
@@ -138,11 +150,12 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.check.outputs.date_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/zhuweijun0121-dotcom/MiyoQian
-            org.opencontainers.image.revision=${{ steps.check.outputs.upstream_sha_full }}
-            org.opencontainers.image.created=${{ steps.check.outputs.build_time }}
+            org.opencontainers.image.revision=${{ steps.ver.outputs.build_commit }}
+            org.opencontainers.image.created=${{ steps.ver.outputs.build_time }}
+            io.miyouqian.upstream-revision=${{ steps.check.outputs.upstream_sha_full }}
           build-args: |
-            BUILD_COMMIT=${{ steps.check.outputs.upstream_sha_full }}
-            BUILD_TIME=${{ steps.check.outputs.build_time }}
+            BUILD_COMMIT=${{ steps.ver.outputs.build_commit }}
+            BUILD_TIME=${{ steps.ver.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

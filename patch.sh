@@ -70,13 +70,20 @@ grep -q 'config.default.yaml' docker/entrypoint.sh \
 echo "✅ docker/entrypoint.sh 已更新（首次启动用本仓默认配置）"
 
 # ---------------------------------------------------------------- 3
-# 业务源码补丁：只有一处，且只改「镜像指向」，不动更新逻辑本身。
+# 业务源码补丁：updater.py 两处，只改「指向」，不动更新算法本身。
 #
-# 背景：上游 updater.py 把镜像写死成 ghcr.io/marchen-orz/miyoqian:latest（作者的）。
-# 我们的容器跑的是 Docker Hub 上的 zhu822560687/miyouqian:latest。没挂 docker.sock 时
-# 上游拿那个硬编码值当"当前镜像"，于是 UI 上显示的和提示你去拉的都成了作者的镜像。
-# 这里换成我们自己的；顺手让「手动命令」提示对 Docker Hub 镜像不再拼 ghcr 加速源。
-echo "=== 3) 补丁：updater.py 的镜像指向本仓镜像 ==="
+# A. 镜像指向：上游把镜像写死成 ghcr.io/marchen-orz/miyoqian:latest（作者的）。
+#    我们的容器跑的是 Docker Hub 的 zhu822560687/miyouqian:latest。没挂 docker.sock 时
+#    上游拿那个硬编码值当「当前镜像」，于是 UI 显示的和提示你去拉的都成了作者的镜像。
+#
+# B. 检查更新的仓库：上游查 Marchen-orz/MiyoQian（作者仓），语义是「作者有没有发新代码」。
+#    但对我们来说「能不能升级」取决于「本仓 CI 有没有构建出新镜像」，所以改查本仓。
+#    注意：atom/api 查 GitHub、镜像查 Docker Hub 是两条独立通道 —— 查本仓才和镜像对得上。
+#
+#    这里有个必须一起成立的前提：镜像里烤的版本标识也得是「本仓 HEAD」，
+#    而不是上游 sha（见 mirror/Dockerfile 与 workflow 的 BUILD_COMMIT）。
+#    否则本仓 HEAD 是 CI 的 chore 提交、镜像里是上游 sha，两者永不相等 → 恒报「有更新」。
+echo "=== 3) 补丁：updater.py（镜像指向本仓 + 检查更新查本仓）==="
 python3 - <<'PY' || fail "updater.py 补丁失败"
 import pathlib
 import sys
@@ -87,11 +94,12 @@ if not p.is_file():
 
 src = p.read_text(encoding="utf-8")
 MIRROR = "zhu822560687/miyouqian:latest"
+OWNER = "zhuweijun0121-dotcom"
+done = []
 
-if "MIRROR_IMAGE" in src:
-    if f'MIRROR_IMAGE = "{MIRROR}"' not in src:
-        sys.exit("updater.py 里已有 MIRROR_IMAGE 但值不是本仓镜像，请人工检查")
-    print("   (已是本仓镜像，跳过)")
+# ---------------------------------------------------------------- A 镜像指向
+if f'MIRROR_IMAGE = "{MIRROR}"' in src:
+    print("   A) 镜像指向已是本仓，跳过")
 else:
     # 1) 常量
     anchor = 'GHCR_DEFAULT_IMAGE = f"{GHCR_REGISTRY}/{GHCR_IMAGE_PATH}:latest"\n'
@@ -100,7 +108,7 @@ else:
     src = src.replace(
         anchor,
         anchor
-        + "\n# 本仓改造：容器实际运行的镜像（Docker Hub）。上游拿 GHCR_DEFAULT_IMAGE 当\n"
+        + '\n# 本仓改造：容器实际运行的镜像（Docker Hub）。上游拿 GHCR_DEFAULT_IMAGE 当\n'
         + '# "当前镜像"兜底时会显示成作者的 ghcr 镜像，这里换成本仓的。\n'
         + f'MIRROR_IMAGE = "{MIRROR}"\n',
         1,
@@ -109,7 +117,7 @@ else:
     # 2) 无 docker.sock 时展示的"当前镜像"
     old = '        info["image"] = GHCR_DEFAULT_IMAGE\n'
     if old not in src:
-        sys.exit("找不到 get_local_version 里的 info[\"image\"] 赋值")
+        sys.exit('找不到 get_local_version 里的 info["image"] 赋值')
     src = src.replace(old, '        info["image"] = MIRROR_IMAGE\n', 1)
 
     # 3) 手动命令提示里的镜像是 local 的兜底
@@ -137,13 +145,37 @@ else:
         old_doc
         + "    # 本仓改造：非 ghcr 镜像（如 Docker Hub）不需要加速源，直接给 compose 命令\n"
         + "    _repo, _tag = split_image_ref(image_ref or MIRROR_IMAGE)\n"
-        + f'    if not _repo.startswith(f"{{GHCR_REGISTRY}}/"):\n'
+        + '    if not _repo.startswith(f"{GHCR_REGISTRY}/"):\n'
         + '        return "docker compose pull && docker compose up -d"\n',
         1,
     )
+    done.append("镜像指向")
 
+# ---------------------------------------------------------------- B 更新检查仓库
+if f'GITHUB_OWNER = "{OWNER}"' in src:
+    print("   B) 检查更新已指向本仓，跳过")
+else:
+    old = 'GITHUB_OWNER = "Marchen-orz"'
+    if old not in src:
+        sys.exit("找不到 GITHUB_OWNER 定义，上游可能改动了该常量")
+    src = src.replace(old, f'GITHUB_OWNER = "{OWNER}"', 1)
+
+    # ghcr 兜底探测路径必须写死上游：本仓不往 ghcr 发布任何包。
+    # （GITHUB_OWNER 改成我们之后，这一行若仍用 f-string 推导会得到一个不存在的路径）
+    old_ghcr = 'GHCR_IMAGE_PATH = f"{GITHUB_OWNER.lower()}/{GITHUB_REPO_NAME.lower()}"'
+    if old_ghcr not in src:
+        sys.exit("找不到 GHCR_IMAGE_PATH 定义")
+    src = src.replace(
+        old_ghcr,
+        "# 本仓改造：ghcr 兜底探测仍指上游（本仓不发布到 ghcr；镜像走 MIRROR_IMAGE）\n"
+        'GHCR_IMAGE_PATH = "marchen-orz/miyouqian"',
+        1,
+    )
+    done.append("检查更新仓库")
+
+if done:
     p.write_text(src, encoding="utf-8")
-    print("   (已把镜像指向本仓并修正手动命令提示)")
+    print("   (已应用：%s)" % "、".join(done))
 
 final = p.read_text(encoding="utf-8")
 for needle in (
@@ -151,12 +183,17 @@ for needle in (
     'info["image"] = MIRROR_IMAGE',
     'or MIRROR_IMAGE).strip()',
     'local.get("image") or MIRROR_IMAGE',
+    f'GITHUB_OWNER = "{OWNER}"',
+    'GHCR_IMAGE_PATH = "marchen-orz/miyouqian"',
+    'GITHUB_REPO = f"{GITHUB_OWNER}/{GITHUB_REPO_NAME}"',
+    'GITHUB_ATOM_URL = f"https://github.com/{GITHUB_REPO}/commits/{GITHUB_BRANCH}.atom"',
 ):
     if needle not in final:
         sys.exit(f"补丁校验失败：缺少 {needle}")
-if 'info["image"] = GHCR_DEFAULT_IMAGE' in final:
-    sys.exit("补丁校验失败：仍残留 info[\"image\"] = GHCR_DEFAULT_IMAGE")
-print("   ✅ 校验通过")
+for bad in ('info["image"] = GHCR_DEFAULT_IMAGE', 'GITHUB_OWNER = "Marchen-orz"'):
+    if bad in final:
+        sys.exit(f"补丁校验失败：仍残留 {bad}")
+print("   ✅ 校验通过（GITHUB_REPO = %s/MiyoQian）" % OWNER)
 PY
 python3 -m py_compile miyouqian/core/updater.py || fail "updater.py 语法检查未通过"
 echo "✅ updater.py 补丁完成，语法检查通过"

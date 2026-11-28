@@ -21,7 +21,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-GITHUB_OWNER = "Marchen-orz"
+GITHUB_OWNER = "zhuweijun0121-dotcom"
 GITHUB_REPO_NAME = "MiyoQian"
 GITHUB_REPO = f"{GITHUB_OWNER}/{GITHUB_REPO_NAME}"
 GITHUB_BRANCH = "master"
@@ -31,7 +31,8 @@ GITHUB_API_COMMIT_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GI
 GITHUB_ARCHIVE_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/{GITHUB_BRANCH}.zip"
 
 GHCR_REGISTRY = "ghcr.io"
-GHCR_IMAGE_PATH = f"{GITHUB_OWNER.lower()}/{GITHUB_REPO_NAME.lower()}"
+# 本仓改造：ghcr 兜底探测仍指上游（本仓不发布到 ghcr；镜像走 MIRROR_IMAGE）
+GHCR_IMAGE_PATH = "marchen-orz/miyouqian"
 GHCR_DEFAULT_IMAGE = f"{GHCR_REGISTRY}/{GHCR_IMAGE_PATH}:latest"
 
 # 本仓改造：容器实际运行的镜像（Docker Hub）。上游拿 GHCR_DEFAULT_IMAGE 当
